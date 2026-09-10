@@ -1,7 +1,7 @@
 import { normalizeInterfaceName } from './interfaces';
 import { isIpv6, normalizeIpv6, parsePrefix6 } from './ipv6';
 import { renderConfigBody } from './ios/show';
-import { ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, type NetworkState, type RouteEntry } from './network';
+import { channelStatus, ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, type ChannelProtocol, type NetworkState, type RouteEntry } from './network';
 import type { AclAddr, AclEntry, AclProtocol, CliErrorKind, DeviceState, LineState, Mode, PortMode } from './types';
 
 interface Base {
@@ -82,6 +82,9 @@ export type Check = Base &
     /** An interface carries the given global address/prefix (any spelling), optionally by EUI-64, or the given manual link-local. */
     | { type: 'ipv6-address'; interface: string; address?: string; prefix?: number; eui64?: boolean; linkLocal?: string }
     | { type: 'route6'; prefix: string; via?: string }
+    /** EtherChannel group state; `members` must all be in the group, `mode` is the Port-channel's switchport mode. */
+    | { type: 'etherchannel'; group: number; bundled?: boolean; protocol?: ChannelProtocol; members?: string[]; mode?: PortMode }
+    | { type: 'port-security'; interface: string; enabled?: boolean; maximum?: number; violation?: 'shutdown' | 'restrict' | 'protect'; sticky?: boolean; mac?: string; secured?: number; errDisabled?: boolean }
   );
 
 export interface Objective {
@@ -205,6 +208,10 @@ function describe(check: Check): string {
       return check.linkLocal ? `${check.interface} has link-local ${check.linkLocal}${on}` : `${check.interface} has ${check.address ?? 'an IPv6 address'}${check.prefix ? `/${check.prefix}` : ''}${check.eui64 ? ' (EUI-64)' : ''}${on}`;
     case 'route6':
       return `IPv6 route ${check.prefix}${check.via ? ` via ${check.via}` : ''}${on}`;
+    case 'etherchannel':
+      return `Port-channel ${check.group}${check.bundled === true ? ' is bundled' : check.bundled === false ? ' is not bundled' : ''}${check.protocol ? ` using ${check.protocol === '-' ? 'static mode' : check.protocol}` : ''}${check.members ? ` with ${check.members.join(', ')}` : ''}${check.mode ? ` as ${check.mode}` : ''}${on}`;
+    case 'port-security':
+      return `${check.interface}: port security${check.enabled === false ? ' disabled' : ''}${check.maximum ? ` maximum ${check.maximum}` : ''}${check.violation ? ` violation ${check.violation}` : ''}${check.sticky ? ' sticky' : ''}${check.mac ? ` secures ${check.mac}` : ''}${check.errDisabled === false ? ' (not err-disabled)' : check.errDisabled ? ' (err-disabled)' : ''}${on}`;
   }
 }
 
@@ -449,6 +456,33 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
       const viaAddr = check.via ? normalizeIpv6(check.via) : null;
       const viaIface = check.via && !viaAddr ? normalizeInterfaceName(check.via) : null;
       return state.staticRoutes6.some((r) => r.prefix === p.address && r.length === p.length && (check.via === undefined || (viaAddr !== null && r.nextHop === viaAddr) || (viaIface !== null && r.exitInterface === viaIface)));
+    }
+    case 'etherchannel': {
+      const g = channelStatus(net, state.id).find((c) => c.id === check.group);
+      if (!g) return false;
+      if (check.bundled !== undefined && g.bundled !== check.bundled) return false;
+      if (check.protocol !== undefined && g.protocol !== check.protocol) return false;
+      if (check.members !== undefined) {
+        const names = g.members.map((m) => m.name);
+        if (!check.members.every((m) => names.includes(normalizeInterfaceName(m) ?? m))) return false;
+      }
+      if (check.mode !== undefined && state.interfaces[g.name]?.mode !== check.mode) return false;
+      return true;
+    }
+    case 'port-security': {
+      const name = normalizeInterfaceName(check.interface);
+      const i = name ? state.interfaces[name] : undefined;
+      if (!i) return false;
+      const ps = i.portSecurity;
+      if (check.enabled === false) return !ps?.enabled;
+      if (!ps?.enabled) return false;
+      if (check.maximum !== undefined && ps.maximum !== check.maximum) return false;
+      if (check.violation !== undefined && ps.violation !== check.violation) return false;
+      if (check.sticky !== undefined && ps.sticky !== check.sticky) return false;
+      if (check.mac !== undefined && ![...ps.staticMacs, ...ps.stickyMacs].includes(check.mac.toLowerCase())) return false;
+      if (check.secured !== undefined && ps.staticMacs.length + ps.stickyMacs.length + ps.learnedMacs.length < check.secured) return false;
+      if (check.errDisabled !== undefined && Boolean(i.errDisabled) !== check.errDisabled) return false;
+      return true;
     }
   }
 }

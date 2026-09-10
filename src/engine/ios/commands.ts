@@ -1,15 +1,19 @@
 import type { CommandDef } from '../resolver';
-import type { Acl, DeviceState, DeviceType, InterfaceState, Mode } from '../types';
-import { isSvi, normalizeInterfaceName, shortInterfaceName, sviVlanId } from '../interfaces';
+import type { Acl, ChannelMode, DeviceState, DeviceType, InterfaceState, Mode } from '../types';
+import { isPortChannel, isSvi, normalizeInterfaceName, shortInterfaceName, sviVlanId } from '../interfaces';
 import { isExtendedNumber, isStandardNumber, nextSeq, parseExtendedRule, parseStandardRule } from '../acl';
 import { eui64Address, isIpv6, isLinkLocal6, normalizeIpv6, parsePrefix6 } from '../ipv6';
 import { clearTranslations } from '../nat';
-import { applyAclHits, isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, routerMac, routingTable, routingTable6, type NetworkState } from '../network';
+import { applyAclHits, channelMembers, channelStatus, isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, portChannelId, routerMac, routingTable, routingTable6, type NetworkState } from '../network';
 import { intToIp, ipToInt, isValidIp, isValidMask, networkAddress, parseVlanList } from './net';
 import {
   defaultVlanName,
   renderConfigBody,
   showAccessLists,
+  showEtherchannelSummary,
+  showPortSecurity,
+  showPortSecurityAddress,
+  showPortSecurityInterface,
   showIpNatStatistics,
   showIpNatTranslations,
   showIpv6InterfaceBrief,
@@ -164,6 +168,16 @@ export const WORD_HELP: Record<string, string> = {
   'unicast-routing': 'Enable unicast routing',
   'eui-64': 'Use eui-64 interface identifier',
   'link-local': 'Use link-local address',
+  'channel-group': 'Etherchannel/port bundling configuration',
+  'channel-protocol': 'Select the channel protocol (LACP, PAgP)',
+  etherchannel: 'EtherChannel information',
+  summary: 'One-line summary per channel-group',
+  'port-security': 'Security related command',
+  maximum: 'Max secure addresses',
+  violation: 'Security violation mode',
+  'mac-address': 'Secure mac address',
+  sticky: 'Configure dynamic secure addresses as sticky',
+  'port-channel': 'Ethernet Channel of interfaces',
 };
 
 // ---------------------------------------------------------------------------
@@ -261,6 +275,14 @@ function enterInterface(state: DeviceState, text: string): string[] | void {
   if (state.interfaces[name]) return selectInterface(state, name);
 
   if (state.deviceType === 'switch') {
+    if (isPortChannel(name)) {
+      const id = portChannelId(name)!;
+      if (id < 1 || id > 48) return [INVALID_INPUT];
+      const po = blankInterface(name, false);
+      po.mode = 'dynamic';
+      state.interfaces[name] = po;
+      return selectInterface(state, name);
+    }
     if (!isSvi(name)) return [INVALID_INPUT];
     const vid = sviVlanId(name)!;
     if (vid < 1 || vid > 4094) return [INVALID_INPUT];
@@ -512,6 +534,18 @@ const SHOW_SWITCH_USER: Def[] = [
     },
   },
   { pattern: 'show mac address-table', help: 'MAC forwarding table', run: ({ network, nodeId }) => showMacAddressTable(macTable(network, nodeId)) },
+  { pattern: 'show etherchannel summary', help: 'One-line summary per channel-group', run: ({ network, nodeId }) => showEtherchannelSummary(channelStatus(network, nodeId)) },
+  { pattern: 'show etherchannel <group> summary', help: 'Channel group number', run: ({ network, nodeId }, a) => showEtherchannelSummary(channelStatus(network, nodeId).filter((c) => String(c.id) === a.group)) },
+  { pattern: 'show port-security', help: 'Show secure port information', run: ({ state }) => showPortSecurity(state) },
+  { pattern: 'show port-security address', help: 'Show secure address', run: ({ state }) => showPortSecurityAddress(state) },
+  {
+    pattern: 'show port-security interface <interface>',
+    help: 'Show secure interface',
+    run: ({ state }, a) => {
+      const i = findInterface(state, a.interface);
+      return i ? showPortSecurityInterface(i) : [INVALID_INPUT];
+    },
+  },
   { pattern: 'show spanning-tree', help: 'Spanning tree topology', run: ({ state }) => showSpanningTree(state) },
   { pattern: 'show storm-control', help: 'Show packet storm control configuration', run: () => ['Interface  Filter State   Upper        Lower        Current'] },
   {
@@ -934,8 +968,8 @@ function removeRoute6(state: DeviceState, prefixText: string, via?: string, next
 const INTERFACE_COMMON: Def[] = [
   { pattern: 'description <text...>', help: 'Interface specific description', run: ({ state }, a) => forEachTarget(state, (i) => void (i.description = a.text)) },
   { pattern: 'no description', help: 'Remove the description', run: ({ state }) => forEachTarget(state, (i) => void (i.description = undefined)) },
-  { pattern: 'shutdown', help: 'Shutdown the selected interface', run: ({ state }) => forEachTarget(state, (i) => { if (i.shutdown) return; i.shutdown = true; return linkChange(i, false); }) },
-  { pattern: 'no shutdown', help: 'Bring the interface up', run: ({ state }) => forEachTarget(state, (i) => { if (!i.shutdown) return; i.shutdown = false; return i.connected || isSvi(i.name) || isLoopback(i.name) ? linkChange(i, true) : undefined; }) },
+  { pattern: 'shutdown', help: 'Shutdown the selected interface', run: ({ state }) => forEachTarget(state, (i) => { i.errDisabled = undefined; if (i.shutdown) return; i.shutdown = true; return linkChange(i, false); }) },
+  { pattern: 'no shutdown', help: 'Bring the interface up', run: ({ state }) => forEachTarget(state, (i) => { i.errDisabled = undefined; if (!i.shutdown) return; i.shutdown = false; return i.connected || isSvi(i.name) || isLoopback(i.name) ? linkChange(i, true) : undefined; }) },
   { pattern: 'speed <speed>', help: 'Configure speed operation.', run: () => undefined },
   { pattern: 'duplex <duplex>', help: 'Configure duplex operation.', run: () => undefined },
   { pattern: 'no ip address', help: 'Remove the IP address', run: ({ state }) => forEachTarget(state, (i) => { i.ipAddress = undefined; i.subnetMask = undefined; }) },
@@ -953,10 +987,46 @@ function setIp(state: DeviceState, address: string, mask: string, allowed: (i: I
   i.subnetMask = mask;
 }
 
-/** Layer 2 commands: rejected on SVIs, applied to every interface in a range. */
+/**
+ * Layer 2 commands: rejected on SVIs, applied to every interface in a range. Configuring a
+ * Port-channel pushes the same settings to its member ports, as IOS does.
+ */
 function l2(state: DeviceState, fn: (i: InterfaceState) => string[] | void): string[] | void {
   if (targetInterfaces(state).some((i) => isSvi(i.name))) return [INVALID_INPUT];
-  return forEachTarget(state, fn);
+  return forEachTarget(state, (i) => {
+    const r = fn(i);
+    if (isPortChannel(i.name)) for (const m of channelMembers(state, i.name)) fn(m);
+    return r;
+  });
+}
+
+const CHANNEL_MODES: ChannelMode[] = ['on', 'active', 'passive', 'desirable', 'auto'];
+
+function setChannelGroup(state: DeviceState, idText: string, modeText: string): string[] | void {
+  const id = Number(idText);
+  const mode = modeText.toLowerCase() as ChannelMode;
+  if (!/^\d+$/.test(idText) || id < 1 || id > 48 || !CHANNEL_MODES.includes(mode)) return [INVALID_INPUT];
+  const targets = targetInterfaces(state);
+  if (targets.some((i) => isSvi(i.name) || isPortChannel(i.name))) return [INVALID_INPUT];
+  const poName = `Port-channel${id}`;
+  const out: string[] = [];
+  if (!state.interfaces[poName]) {
+    const first = targets[0];
+    state.interfaces[poName] = { ...blankInterface(poName, false), mode: first.mode, accessVlan: first.accessVlan, trunkAllowed: first.trunkAllowed, nativeVlan: first.nativeVlan };
+    out.push(`Creating a port-channel interface Port-channel ${id}`);
+  }
+  for (const i of targets) i.channelGroup = { id, mode };
+  return out.length ? out : undefined;
+}
+
+function ensurePortSecurity(i: InterfaceState) {
+  return (i.portSecurity ??= { enabled: false, maximum: 1, violation: 'shutdown', sticky: false, staticMacs: [], stickyMacs: [], learnedMacs: [], violations: 0 });
+}
+
+function normalizeMac(text: string): string | null {
+  const hex = text.toLowerCase().replace(/[^0-9a-f]/g, '');
+  if (hex.length !== 12) return null;
+  return `${hex.slice(0, 4)}.${hex.slice(4, 8)}.${hex.slice(8)}`;
 }
 
 export const INTERFACE_CONFIG: Def[] = [
@@ -978,6 +1048,32 @@ export const INTERFACE_CONFIG: Def[] = [
   { pattern: 'no switchport trunk allowed vlan', help: 'Reset allowed VLANs to all', run: ({ state }) => l2(state, (i) => void (i.trunkAllowed = 'all')) },
   { pattern: 'switchport trunk native vlan <vlan>', help: 'Set native VLAN when interface is in trunking mode', run: ({ state }, a) => l2(state, (i) => { const v = Number(a.vlan); if (!/^\d+$/.test(a.vlan) || v < 1 || v > 4094) return [INVALID_INPUT]; i.nativeVlan = v; }) },
   { pattern: 'no switchport trunk native vlan', help: 'Reset native VLAN to default', run: ({ state }) => l2(state, (i) => void (i.nativeVlan = 1)) },
+  // EtherChannel
+  { pattern: 'channel-group <number> mode <mode>', help: 'Etherchannel/port bundling configuration', run: ({ state }, a) => setChannelGroup(state, a.number, a.mode) },
+  { pattern: 'no channel-group', help: 'Remove the port from its channel group', run: ({ state }) => forEachTarget(state, (i) => void (i.channelGroup = undefined)) },
+  { pattern: 'no channel-group <number>', help: 'Remove the port from its channel group', run: ({ state }) => forEachTarget(state, (i) => void (i.channelGroup = undefined)) },
+  { pattern: 'channel-protocol lacp', help: 'Prepare interface for LACP protocol', run: () => undefined },
+  { pattern: 'channel-protocol pagp', help: 'Prepare interface for PAgP protocol', run: () => undefined },
+  // Port security
+  {
+    pattern: 'switchport port-security',
+    help: 'Security related command',
+    run: ({ state }) =>
+      l2(state, (i) => {
+        if (i.mode !== 'access') return [`Command rejected: ${i.name} is a dynamic port.`];
+        ensurePortSecurity(i).enabled = true;
+      }),
+  },
+  { pattern: 'no switchport port-security', help: 'Disable port security', run: ({ state }) => l2(state, (i) => { if (i.portSecurity) i.portSecurity.enabled = false; }) },
+  { pattern: 'switchport port-security maximum <count>', help: 'Max secure addresses', run: ({ state }, a) => { const n = Number(a.count); if (!/^\d+$/.test(a.count) || n < 1 || n > 3072) return [INVALID_INPUT]; return l2(state, (i) => void (ensurePortSecurity(i).maximum = n)); } },
+  { pattern: 'no switchport port-security maximum', help: 'Reset the maximum', run: ({ state }) => l2(state, (i) => void (ensurePortSecurity(i).maximum = 1)) },
+  { pattern: 'switchport port-security violation <mode>', help: 'Security violation mode', run: ({ state }, a) => { const m = a.mode.toLowerCase(); if (!['shutdown', 'restrict', 'protect'].includes(m)) return [INVALID_INPUT]; return l2(state, (i) => void (ensurePortSecurity(i).violation = m as 'shutdown' | 'restrict' | 'protect')); } },
+  { pattern: 'switchport port-security mac-address sticky', help: 'Configure dynamic secure addresses as sticky', run: ({ state }) => l2(state, (i) => { const ps = ensurePortSecurity(i); ps.sticky = true; ps.stickyMacs.push(...ps.learnedMacs); ps.learnedMacs = []; }) },
+  { pattern: 'no switchport port-security mac-address sticky', help: 'Stop learning sticky addresses', run: ({ state }) => l2(state, (i) => { const ps = ensurePortSecurity(i); ps.sticky = false; ps.stickyMacs = []; }) },
+  { pattern: 'switchport port-security mac-address sticky <mac>', help: 'Configure a sticky secure address', run: ({ state }, a) => { const mac = normalizeMac(a.mac); if (!mac) return [INVALID_INPUT]; return l2(state, (i) => { const ps = ensurePortSecurity(i); ps.sticky = true; if (!ps.stickyMacs.includes(mac)) ps.stickyMacs.push(mac); }); } },
+  { pattern: 'switchport port-security mac-address <mac>', help: 'Secure mac address', run: ({ state }, a) => { const mac = normalizeMac(a.mac); if (!mac) return [INVALID_INPUT]; return l2(state, (i) => { const ps = ensurePortSecurity(i); if (ps.staticMacs.length + ps.stickyMacs.length >= ps.maximum && !ps.staticMacs.includes(mac)) return ['% Total secure mac-addresses on interface exceeds the maximum allowed']; if (!ps.staticMacs.includes(mac)) ps.staticMacs.push(mac); }); } },
+  { pattern: 'no switchport port-security mac-address <mac>', help: 'Remove a secure mac address', run: ({ state }, a) => { const mac = normalizeMac(a.mac); if (!mac) return [INVALID_INPUT]; return l2(state, (i) => { const ps = ensurePortSecurity(i); ps.staticMacs = ps.staticMacs.filter((m) => m !== mac); ps.stickyMacs = ps.stickyMacs.filter((m) => m !== mac); }); } },
+  { pattern: 'no switchport port-security mac-address sticky <mac>', help: 'Remove a sticky secure mac address', run: ({ state }, a) => { const mac = normalizeMac(a.mac); if (!mac) return [INVALID_INPUT]; return l2(state, (i) => { const ps = ensurePortSecurity(i); ps.stickyMacs = ps.stickyMacs.filter((m) => m !== mac); }); } },
   ...SWITCH_JUMPS,
 ];
 

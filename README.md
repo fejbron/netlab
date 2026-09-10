@@ -4,12 +4,15 @@
 
 Open-source network CLI labs that run entirely in your browser. Practise Cisco IOS switch configuration in a simulated terminal, get graded live against lab objectives, and track progress on your device. No installs, no accounts, no payments.
 
-> Status: early MVP. Cisco IOS switches and routers, PCs with a mini terminal, 65 labs across ten modules (Meet the CLI, Learn Switching, Secure the Switch, Learn Routing, Learn OSPF, Learn ACLs, Learn DHCP, Learn NAT, Learn IPv6, CCNA Exams), a faithful command resolver, a packet-forwarding simulation with single-area OSPF, enforced access lists, DHCP, NAT and IPv6, and a live grader. See the roadmap below.
+> Status: early MVP. Cisco IOS switches and routers, PCs with a mini terminal, 70 labs across eleven modules (Meet the CLI, Learn Switching, Learn EtherChannel, Secure the Switch, Learn Routing, Learn OSPF, Learn ACLs, Learn DHCP, Learn NAT, Learn IPv6, CCNA Exams), a faithful command resolver, a packet-forwarding simulation with single-area OSPF, enforced access lists, DHCP, NAT, IPv6, EtherChannel and port security, and a live grader. Labs unlock in order. See the roadmap below.
 
 ## Features
 
 - **Realistic IOS CLI**: mode hierarchy (`>`, `#`, `(config)#`, `(config-if)#`, `(config-subif)#`, `(config-vlan)#`, `(config-line)#`), prefix abbreviation (`conf t`, `sh run`), Tab completion, `?` context help, `do` from config mode, and the authentic error messages (`% Invalid input detected at '^' marker.`, `% Incomplete command.`, `% Ambiguous command`).
 - **Stateful switch model**: hostname, banner, enable secret, local users, console/VTY lines, VLAN database, access and trunk ports, `interface range`, SVIs, default gateway, SSH keys, password encryption, running vs startup config, and `show` output that matches real formatting.
+- **EtherChannel**: `channel-group` with LACP (active/passive), PAgP (desirable/auto) and static (on) modes, `interface Port-channel` whose settings flow to member ports, negotiation rules evaluated from both ends of each link, members flagged P/I/s/D, and `show etherchannel summary`.
+- **Port security**: `switchport port-security` with maximum, static and sticky addresses and shutdown/restrict/protect violation modes, enforced when a PC sends traffic. Violations err-disable the port (or drop frames), `shutdown` / `no shutdown` recovers it, and `show port-security` (interface and address) reports the state.
+- **Progression**: labs unlock in order, so passing the last lab of a module opens the next module. A "Unlock all labs" switch on the lab list turns this off for free practice.
 - **Router model**: routed interfaces, dot1Q subinterfaces, loopbacks, static and default routes with administrative distance, and an IOS 15 style `show ip route` with connected, local, static and OSPF routes grouped by classful network.
 - **OSPF**: `router ospf`, router IDs (configured or elected from loopbacks and interfaces), `network` statements with wildcard masks and areas, `ip ospf <pid> area`, passive interfaces, interface cost and priority, DR/BDR election per segment, neighbours only when area and subnet match, SPF over the router graph with accumulated metrics, administrative distance 110, and `default-information originate` producing O*E2 defaults. `show ip ospf neighbor`, `show ip ospf interface brief`, `show ip ospf`, `show ip protocols`, `show ip route ospf`.
 - **Multi-device topologies with real forwarding**: labs can hold several switches, routers and PCs. `ping` and `traceroute` walk frames through switches (access, trunk, native and allowed VLANs, router subinterface tags) and route packets hop by hop, and only succeed when the reply can get back too.
@@ -91,7 +94,7 @@ createState: () =>
   }),
 ```
 
-Every check accepts an optional `device` (a device id, or a host id for `ping`); it defaults to the network's primary device. Available check types: `command` (regex over the expanded command history), `mode`, `hostname`, `vlan-exists`, `vlan-absent`, `interface`, `enable-secret`, `enable-password`, `line`, `user`, `banner`, `domain-name`, `ssh-ready`, `default-gateway`, `saved`, `password-encryption`, `error-seen`, `ping`, `route`, `route-absent`, `learned-route`, `ospf`, `ospf-network`, `ospf-network-absent`, `ospf-neighbors`, `passive-interface`, `default-information-originate`, `trunk-allows`, `acl-exists`, `acl-entry`, `acl-applied`, `acl-not-applied`, `access-class`, `dhcp-pool`, `dhcp-excluded`, `dhcp-bindings`, `helper-address`, `host-config`, `nat-role`, `nat-static`, `nat-pool`, `nat-dynamic`, `nat-translations`, `ipv6-unicast-routing`, `ipv6-address`, `route6`. See `src/engine/grader.ts`.
+Every check accepts an optional `device` (a device id, or a host id for `ping`); it defaults to the network's primary device. Available check types: `command` (regex over the expanded command history), `mode`, `hostname`, `vlan-exists`, `vlan-absent`, `interface`, `enable-secret`, `enable-password`, `line`, `user`, `banner`, `domain-name`, `ssh-ready`, `default-gateway`, `saved`, `password-encryption`, `error-seen`, `ping`, `route`, `route-absent`, `learned-route`, `ospf`, `ospf-network`, `ospf-network-absent`, `ospf-neighbors`, `passive-interface`, `default-information-originate`, `trunk-allows`, `acl-exists`, `acl-entry`, `acl-applied`, `acl-not-applied`, `access-class`, `dhcp-pool`, `dhcp-excluded`, `dhcp-bindings`, `helper-address`, `host-config`, `nat-role`, `nat-static`, `nat-pool`, `nat-dynamic`, `nat-translations`, `ipv6-unicast-routing`, `ipv6-address`, `route6`, `etherchannel`, `port-security`. See `src/engine/grader.ts`.
 
 Add the lab to a module file in `src/content/labs/` and add a reference solution to `src/engine/grader.test.ts` so it stays green.
 
@@ -103,8 +106,9 @@ Add the lab to a module file in `src/content/labs/` and add a reference solution
 - [x] Access control lists enforced in the forwarding simulation
 - [x] DHCP server and relay
 - [x] NAT (static, dynamic, PAT) and IPv6 addressing with static routing
+- [x] EtherChannel (LACP, PAgP, static) and port security
 - [ ] OSPFv3, SLAAC and DHCPv6, IPv6 access lists
-- [ ] Multi-area OSPF, EtherChannel, spanning-tree behaviour, port security
+- [ ] Multi-area OSPF, spanning-tree behaviour (root election, blocked ports), Layer 3 EtherChannel
 - [ ] More vendors through the adapter pattern (JunOS, Arista EOS, Aruba CX)
 - [ ] Sandbox topology editor
 - [ ] Markdown lab format and a lab authoring page

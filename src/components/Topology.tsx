@@ -127,11 +127,15 @@ export default function Topology({ network, active, onSelect }: Props) {
                     );
                   }
                   const status = interfaceStatus(i);
-                  const color = status === 'connected' ? 'text-success' : status === 'disabled' ? 'text-danger' : 'text-muted';
+                  const color = status === 'connected' ? 'text-success' : status === 'disabled' || status === 'err-disabled' ? 'text-danger' : 'text-muted';
                   return (
                     <tr key={i.name} className="border-t border-border/60">
                       <td className="py-1 text-fg-bright">{shortInterfaceName(i.name)}</td>
-                      <td className="py-1">{i.mode}</td>
+                      <td className="py-1">
+                        {i.mode}
+                        {i.channelGroup ? <span className="text-muted"> po{i.channelGroup.id}</span> : null}
+                        {i.portSecurity?.enabled ? <span className="text-muted"> sec</span> : null}
+                      </td>
                       <td className="py-1">{i.mode === 'trunk' ? 'trunk' : i.accessVlan}</td>
                       <td className={`py-1 ${color}`}>● {status}</td>
                     </tr>

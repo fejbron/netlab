@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import Header from '../components/Header';
-import { labs, labsForModule, modules } from '../content';
-import { loadProgress, resetProgress } from '../lib/progress';
+import { isLabUnlocked, labs, labsForModule, modules } from '../content';
+import { loadProgress, loadUnlockAll, resetProgress, saveUnlockAll } from '../lib/progress';
 
 export default function DashboardPage() {
   const [progress, setProgress] = useState(loadProgress);
+  const [unlockAll, setUnlockAll] = useState(loadUnlockAll);
   const completed = labs.filter((l) => progress[l.id]).length;
 
   return (
@@ -14,6 +15,17 @@ export default function DashboardPage() {
         <span className="text-muted">
           {completed}/{labs.length} labs complete
         </span>
+        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted" title="Ignore the lab order and open everything">
+          <input
+            type="checkbox"
+            checked={unlockAll}
+            onChange={(e) => {
+              setUnlockAll(e.target.checked);
+              saveUnlockAll(e.target.checked);
+            }}
+          />
+          Unlock all labs
+        </label>
         {completed > 0 && (
           <button
             type="button"
@@ -32,17 +44,21 @@ export default function DashboardPage() {
       <main className="mx-auto w-full max-w-5xl flex-1 overflow-y-auto px-4 py-8">
         <h1 className="display text-4xl text-fg-bright md:text-5xl">Learn networking by doing.</h1>
         <p className="mt-2 max-w-2xl text-muted">
-          Hands-on Cisco IOS labs that run entirely in your browser. No installs, no accounts, no payments. Progress is stored on this device.
+          Hands-on Cisco IOS labs that run entirely in your browser. No installs, no accounts, no payments. Progress is stored on this device. Labs unlock in order: pass one to open the next.
         </p>
 
         {modules.map((m) => {
           const items = labsForModule(m.id);
           const done = items.filter((l) => progress[l.id]).length;
+          const moduleOpen = items.some((l) => isLabUnlocked(l.id, progress, unlockAll));
           return (
-            <section key={m.id} className="mt-10">
+            <section key={m.id} className={`mt-10 ${moduleOpen ? '' : 'opacity-60'}`}>
               <div className="mb-3 flex items-end justify-between">
                 <div>
-                  <h2 className="display text-2xl text-fg-bright">{m.title}</h2>
+                  <h2 className="display text-2xl text-fg-bright">
+                    {m.title}
+                    {!moduleOpen && <span className="ml-2 text-base not-italic text-muted">🔒</span>}
+                  </h2>
                   <p className="text-sm text-muted">{m.description}</p>
                 </div>
                 <span className="text-xs text-muted">
@@ -52,10 +68,11 @@ export default function DashboardPage() {
               <ol className="space-y-2">
                 {items.map((lab, idx) => {
                   const p = progress[lab.id];
+                  const unlocked = isLabUnlocked(lab.id, progress, unlockAll);
                   return (
-                    <li key={lab.id} className="flex items-center gap-4 rounded-xl border border-border bg-surface p-4">
-                      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${p ? 'border-success text-success' : 'border-border text-muted'}`}>
-                        {p ? '✓' : idx + 1}
+                    <li key={lab.id} className={`flex items-center gap-4 rounded-xl border border-border bg-surface p-4 ${unlocked ? '' : 'opacity-70'}`}>
+                      <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${p ? 'border-success text-success' : unlocked ? 'border-border text-muted' : 'border-border text-muted'}`} aria-hidden>
+                        {p ? '✓' : unlocked ? idx + 1 : '🔒'}
                       </span>
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
@@ -81,9 +98,15 @@ export default function DashboardPage() {
                             <span className="text-border">{'★'.repeat(3 - p.stars)}</span>
                           </span>
                         )}
-                        <Link to={`/lab/${lab.id}`} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
-                          {p ? 'Replay' : 'Begin'} →
-                        </Link>
+                        {unlocked ? (
+                          <Link to={`/lab/${lab.id}`} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
+                            {p ? 'Replay' : 'Begin'} →
+                          </Link>
+                        ) : (
+                          <span className="rounded-lg border border-border px-4 py-1.5 text-sm text-muted" title="Pass the previous lab to unlock">
+                            Locked
+                          </span>
+                        )}
                       </div>
                     </li>
                   );

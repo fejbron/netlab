@@ -11,8 +11,8 @@
  * Routing tables combine connected, local and static routes with routes learned by
  * the OSPF simulation (neighbours on shared segments, SPF over the router graph).
  */
-import type { DeviceState, InterfaceState, PingRecord } from './types';
-import { isSvi, normalizeInterfaceName, sviVlanId } from './interfaces';
+import type { ChannelMode, DeviceState, InterfaceState, PingRecord } from './types';
+import { isPortChannel, isSvi, normalizeInterfaceName, sviVlanId } from './interfaces';
 import { intToIp, ipToInt, isValidIp, networkAddress, prefixLength, sameSubnet } from './ios/net';
 import { evaluateAcl, type Packet } from './acl';
 import { isIpv6, isLinkLocal6, linkLocalFromMac, networkAddress6, normalizeIpv6, parseIpv6, prefixMask6, sameSubnet6 } from './ipv6';
@@ -92,10 +92,109 @@ export function peerOf(net: NetworkState, node: string, iface: string): Endpoint
 export function ifaceUp(net: NetworkState, node: string, ifaceName: string): boolean {
   const dev = net.devices[node];
   const i = dev?.interfaces[ifaceName];
-  if (!i || i.shutdown) return false;
+  if (!i || i.shutdown || i.errDisabled) return false;
   if (isSvi(i.name) || isLoopback(i.name)) return true;
   if (isSubinterface(i.name)) return ifaceUp(net, node, parentInterface(i.name));
+  if (isPortChannel(i.name)) return channelMembers(dev, i.name).some((m) => ifaceUp(net, node, m.name));
   return i.connected;
+}
+
+export function portChannelId(name: string): number | null {
+  const m = name.match(/^Port-channel(\d+)$/);
+  return m ? Number(m[1]) : null;
+}
+
+/** Physical ports configured into a Port-channel. */
+export function channelMembers(dev: DeviceState, poName: string): InterfaceState[] {
+  const id = portChannelId(poName);
+  if (id === null) return [];
+  return Object.values(dev.interfaces).filter((i) => i.channelGroup?.id === id && !isPortChannel(i.name));
+}
+
+export type ChannelProtocol = 'LACP' | 'PAgP' | '-';
+
+export interface ChannelStatus {
+  id: number;
+  name: string;
+  protocol: ChannelProtocol;
+  /** P bundled, I stand-alone (peer incompatible), D down, s suspended (config mismatch). */
+  members: Array<{ name: string; flag: 'P' | 'I' | 'D' | 's' }>;
+  bundled: boolean;
+}
+
+function channelProtocol(mode: ChannelMode): ChannelProtocol {
+  return mode === 'on' ? '-' : mode === 'active' || mode === 'passive' ? 'LACP' : 'PAgP';
+}
+
+function modesCompatible(a: ChannelMode, b: ChannelMode): boolean {
+  if (a === 'on' || b === 'on') return a === b;
+  if (a === 'active') return b === 'active' || b === 'passive';
+  if (a === 'passive') return b === 'active';
+  if (a === 'desirable') return b === 'desirable' || b === 'auto';
+  return b === 'desirable'; // auto
+}
+
+function sameL2Config(a: InterfaceState, b: InterfaceState): boolean {
+  const list = (x: InterfaceState) => (x.trunkAllowed === 'all' ? 'all' : x.trunkAllowed.join(','));
+  return a.mode === b.mode && a.accessVlan === b.accessVlan && a.nativeVlan === b.nativeVlan && list(a) === list(b);
+}
+
+/** EtherChannel state of every group on a switch, computed from both ends of each member link. */
+export function channelStatus(net: NetworkState, swId: string): ChannelStatus[] {
+  const dev = net.devices[swId];
+  const groups = new Map<number, InterfaceState[]>();
+  for (const i of Object.values(dev.interfaces)) {
+    if (i.channelGroup && !isPortChannel(i.name)) groups.set(i.channelGroup.id, [...(groups.get(i.channelGroup.id) ?? []), i]);
+  }
+  const out: ChannelStatus[] = [];
+  for (const [id, members] of [...groups.entries()].sort((a, b) => a[0] - b[0])) {
+    const po = dev.interfaces[`Port-channel${id}`];
+    let peerSwitch: string | null = null;
+    let peerGroup: number | null = null;
+    const flagged = members
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+      .map((m) => {
+        if (!ifaceUp(net, swId, m.name) || (po && po.shutdown)) return { name: m.name, flag: 'D' as const };
+        const p = peerOf(net, swId, m.name);
+        const peer = p ? net.devices[p.node]?.interfaces[p.iface] : undefined;
+        if (!p || !peer?.channelGroup || net.devices[p.node].deviceType !== 'switch' || !modesCompatible(m.channelGroup!.mode, peer.channelGroup.mode)) return { name: m.name, flag: 'I' as const };
+        if (po && !sameL2Config(po, m)) return { name: m.name, flag: 's' as const };
+        if (peerSwitch === null) {
+          peerSwitch = p.node;
+          peerGroup = peer.channelGroup.id;
+        } else if (peerSwitch !== p.node || peerGroup !== peer.channelGroup.id) return { name: m.name, flag: 's' as const };
+        return { name: m.name, flag: 'P' as const };
+      });
+    out.push({ id, name: `Port-channel${id}`, protocol: channelProtocol(members[0].channelGroup!.mode), members: flagged, bundled: flagged.some((f) => f.flag === 'P') });
+  }
+  return out;
+}
+
+/**
+ * Port security on the switch port a host is cabled to. Learns addresses (sticky or
+ * dynamic) up to the maximum and applies the violation mode when exceeded.
+ */
+function portSecurityIngress(net: NetworkState, hostId: string, record: boolean): { ok: boolean; reason?: string } {
+  const h = net.hosts[hostId];
+  const p = peerOf(net, hostId, HOST_IFACE);
+  if (!h || !p) return { ok: true };
+  const sw = net.devices[p.node];
+  const port = sw?.interfaces[p.iface];
+  const ps = port?.portSecurity;
+  if (!sw || !port || !ps?.enabled) return { ok: true };
+  if (port.errDisabled) return { ok: false, reason: 'port err-disabled' };
+  const allowed = [...ps.staticMacs, ...ps.stickyMacs, ...ps.learnedMacs];
+  if (allowed.includes(h.mac)) return { ok: true };
+  if (allowed.length < ps.maximum) {
+    if (record) (ps.sticky ? ps.stickyMacs : ps.learnedMacs).push(h.mac);
+    return { ok: true };
+  }
+  if (record) {
+    ps.violations += 1;
+    ps.lastViolationMac = h.mac;
+    if (ps.violation === 'shutdown') port.errDisabled = true;
+  }
+  return { ok: false, reason: 'port security violation' };
 }
 
 /**
@@ -118,6 +217,7 @@ export function syncLinkState(net: NetworkState): void {
     }
     for (const i of Object.values(dev.interfaces)) {
       if (isSubinterface(i.name)) i.connected = dev.interfaces[parentInterface(i.name)]?.connected ?? false;
+      else if (isPortChannel(i.name)) i.connected = channelMembers(dev, i.name).some((m) => m.connected && !m.shutdown && !m.errDisabled);
     }
   }
 }
@@ -788,6 +888,10 @@ export function forward(net: NetworkState, from: string, dstArg: string, spec: P
   let srcIp: string | undefined = spec.src;
   let srcPort: number | undefined = spec.srcPort;
   let inIface: string | undefined;
+  if (net.hosts[from]) {
+    const ps = portSecurityIngress(net, from, record);
+    if (!ps.ok) return { reached: false, hops, reason: ps.reason, hits };
+  }
   for (let ttl = 0; ttl < 32; ttl++) {
     if (ownsIp(net, cur, dst)) return { reached: true, hops, srcIp: srcIp ?? dst, srcPort, hits };
     const d = decide(net, cur, dst);

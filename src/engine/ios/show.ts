@@ -1,6 +1,6 @@
 import type { Acl, DeviceState, InterfaceState } from '../types';
-import { compareInterfaceNames, isSvi, shortInterfaceName } from '../interfaces';
-import { ifaceIpv6, isLoopback, isSubinterface, type MacEntry, type OspfInterfaceInfo, type OspfNeighbor, type RouteEntry, type RouteEntry6 } from '../network';
+import { compareInterfaceNames, isPortChannel, isSvi, shortInterfaceName } from '../interfaces';
+import { ifaceIpv6, isLoopback, isSubinterface, type ChannelStatus, type MacEntry, type OspfInterfaceInfo, type OspfNeighbor, type RouteEntry, type RouteEntry6 } from '../network';
 import { ruleText } from '../acl';
 import { networkAddress6 } from '../ipv6';
 import { classfulNetwork, ipToInt, prefixLength } from './net';
@@ -13,6 +13,11 @@ export function sortedInterfaces(state: DeviceState): InterfaceState[] {
 
 export function physicalInterfaces(state: DeviceState): InterfaceState[] {
   return sortedInterfaces(state).filter((i) => !isSvi(i.name) && !isLoopback(i.name) && !isSubinterface(i.name));
+}
+
+/** Interfaces that carry VLAN membership in show output: bundled members are represented by their Port-channel. */
+function l2Interfaces(state: DeviceState): InterfaceState[] {
+  return physicalInterfaces(state).filter((i) => !i.channelGroup || isPortChannel(i.name));
 }
 
 /** Deterministic fake MD5-style hash so "enable secret 5 ..." looks right. */
@@ -183,6 +188,84 @@ function renderRouterConfigBody(state: DeviceState): string[] {
   return out;
 }
 
+export function showEtherchannelSummary(groups: ChannelStatus[]): string[] {
+  const out = [
+    'Flags:  D - down        P - bundled in port-channel',
+    '        I - stand-alone s - suspended',
+    '        H - Hot-standby (LACP only)',
+    '        R - Layer3      S - Layer2',
+    '        U - in use      f - failed to allocate aggregator',
+    '',
+    '        M - not in use, minimum links not met',
+    '        u - unsuitable for bundling',
+    '        w - waiting to be aggregated',
+    '        d - default port',
+    '',
+    '        A - formed by Auto LAG',
+    '',
+    '',
+    `Number of channel-groups in use: ${groups.length}`,
+    `Number of aggregators:           ${groups.length}`,
+    '',
+    'Group  Port-channel  Protocol    Ports',
+    '------+-------------+-----------+-----------------------------------------------',
+  ];
+  for (const g of groups) {
+    const po = `Po${g.id}(${g.bundled ? 'SU' : 'SD'})`;
+    const ports = g.members.map((m) => `${shortInterfaceName(m.name)}(${m.flag})`.padEnd(12)).join('').trimEnd();
+    out.push(`${String(g.id).padEnd(7)}${po.padEnd(16)}${g.protocol.padEnd(10)}${ports}`);
+  }
+  return out;
+}
+
+export function showPortSecurity(state: DeviceState): string[] {
+  const out = ['Secure Port  MaxSecureAddr  CurrentAddr  SecurityViolation  Security Action', '                (Count)       (Count)          (Count)', '---------------------------------------------------------------------------'];
+  let total = 0;
+  for (const i of physicalInterfaces(state)) {
+    const ps = i.portSecurity;
+    if (!ps?.enabled) continue;
+    const current = ps.staticMacs.length + ps.stickyMacs.length + ps.learnedMacs.length;
+    total += current;
+    out.push(`${shortInterfaceName(i.name).padEnd(15)}${String(ps.maximum).padEnd(15)}${String(current).padEnd(18)}${String(ps.violations).padEnd(14)}${ps.violation[0].toUpperCase()}${ps.violation.slice(1)}`);
+  }
+  out.push('---------------------------------------------------------------------------', `Total Addresses in System (excluding one mac per port)     : ${Math.max(0, total - out.length + 4)}`, 'Max Addresses limit in System (excluding one mac per port) : 8192');
+  return out;
+}
+
+export function showPortSecurityInterface(i: InterfaceState): string[] {
+  const ps = i.portSecurity ?? { enabled: false, maximum: 1, violation: 'shutdown', sticky: false, staticMacs: [], stickyMacs: [], learnedMacs: [], violations: 0 };
+  const current = ps.staticMacs.length + ps.stickyMacs.length + ps.learnedMacs.length;
+  const portStatus = i.errDisabled ? 'Secure-shutdown' : ps.enabled && (i.connected && !i.shutdown) ? 'Secure-up' : 'Secure-down';
+  return [
+    `Port Security              : ${ps.enabled ? 'Enabled' : 'Disabled'}`,
+    `Port Status                : ${portStatus}`,
+    `Violation Mode             : ${ps.violation[0].toUpperCase()}${ps.violation.slice(1)}`,
+    'Aging Time                 : 0 mins',
+    'Aging Type                 : Absolute',
+    'SecureStatic Address Aging : Disabled',
+    `Maximum MAC Addresses      : ${ps.maximum}`,
+    `Total MAC Addresses        : ${current}`,
+    `Configured MAC Addresses   : ${ps.staticMacs.length}`,
+    `Sticky MAC Addresses       : ${ps.stickyMacs.length}`,
+    `Last Source Address:Vlan   : ${ps.lastViolationMac ?? [...ps.stickyMacs, ...ps.learnedMacs, ...ps.staticMacs][0] ?? '0000.0000.0000'}:${i.accessVlan}`,
+    `Security Violation Count   : ${ps.violations}`,
+  ];
+}
+
+export function showPortSecurityAddress(state: DeviceState): string[] {
+  const out = ['               Secure Mac Address Table', '-----------------------------------------------------------------------------', 'Vlan    Mac Address       Type                          Ports   Remaining Age', '                                                                   (mins)', '----    -----------       ----                          -----   -------------'];
+  let count = 0;
+  for (const i of physicalInterfaces(state)) {
+    const ps = i.portSecurity;
+    if (!ps?.enabled) continue;
+    for (const m of ps.staticMacs) out.push(`${String(i.accessVlan).padStart(4)}    ${m}    SecureConfigured              ${shortInterfaceName(i.name).padEnd(8)}-`), count++;
+    for (const m of ps.stickyMacs) out.push(`${String(i.accessVlan).padStart(4)}    ${m}    SecureSticky                  ${shortInterfaceName(i.name).padEnd(8)}-`), count++;
+    for (const m of ps.learnedMacs) out.push(`${String(i.accessVlan).padStart(4)}    ${m}    SecureDynamic                 ${shortInterfaceName(i.name).padEnd(8)}-`), count++;
+  }
+  out.push('-----------------------------------------------------------------------------', `Total Addresses in System (excluding one mac per port)     : ${count}`, 'Max Addresses limit in System (excluding one mac per port) : 8192');
+  return out;
+}
+
 export function showIpNatTranslations(state: DeviceState): string[] {
   const out = ['Pro  Inside global         Inside local          Outside local         Outside global'];
   const col = (s: string) => s.padEnd(22);
@@ -348,6 +431,16 @@ function renderSwitchConfigBody(state: DeviceState): string[] {
       if (i.trunkAllowed !== 'all') out.push(` switchport trunk allowed vlan ${formatVlanList(i.trunkAllowed)}`);
       if (i.nativeVlan !== 1) out.push(` switchport trunk native vlan ${i.nativeVlan}`);
       if (i.mode !== 'dynamic') out.push(` switchport mode ${i.mode}`);
+      const ps = i.portSecurity;
+      if (ps?.enabled) {
+        out.push(' switchport port-security');
+        if (ps.maximum !== 1) out.push(` switchport port-security maximum ${ps.maximum}`);
+        if (ps.violation !== 'shutdown') out.push(` switchport port-security violation ${ps.violation}`);
+        if (ps.sticky) out.push(' switchport port-security mac-address sticky');
+        for (const m of ps.stickyMacs) out.push(` switchport port-security mac-address sticky ${m}`);
+        for (const m of ps.staticMacs) out.push(` switchport port-security mac-address ${m}`);
+      }
+      if (i.channelGroup) out.push(` channel-group ${i.channelGroup.id} mode ${i.channelGroup.mode}`);
     }
     if (i.shutdown) out.push(' shutdown');
     out.push('!');
@@ -381,7 +474,7 @@ export function showVlanBrief(state: DeviceState): string[] {
   ];
   const vlans = Object.values(state.vlans).sort((a, b) => a.id - b.id);
   for (const v of vlans) {
-    const ports = physicalInterfaces(state)
+    const ports = l2Interfaces(state)
       .filter((i) => i.mode !== 'trunk' && i.accessVlan === v.id)
       .map((i) => shortInterfaceName(i.name));
     const status = v.id >= 1002 ? 'act/unsup' : 'active';
@@ -393,7 +486,8 @@ export function showVlanBrief(state: DeviceState): string[] {
   return out;
 }
 
-export function interfaceStatus(i: InterfaceState): 'connected' | 'notconnect' | 'disabled' {
+export function interfaceStatus(i: InterfaceState): 'connected' | 'notconnect' | 'disabled' | 'err-disabled' {
+  if (i.errDisabled) return 'err-disabled';
   if (i.shutdown) return 'disabled';
   return i.connected ? 'connected' : 'notconnect';
 }
@@ -413,7 +507,7 @@ export function showInterfacesStatus(state: DeviceState): string[] {
 }
 
 export function showInterfacesTrunk(state: DeviceState): string[] {
-  const trunks = physicalInterfaces(state).filter((i) => i.mode === 'trunk' && !i.shutdown);
+  const trunks = l2Interfaces(state).filter((i) => i.mode === 'trunk' && !i.shutdown);
   if (trunks.length === 0) return [];
   const existing = Object.keys(state.vlans).map(Number);
   const out = ['Port        Mode             Encapsulation  Status        Native vlan'];

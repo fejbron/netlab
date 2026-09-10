@@ -275,7 +275,10 @@ export function createSwitch(options: SwitchOptions = {}): DeviceState {
 
   for (const [key, patch] of Object.entries(options.interfaces ?? {})) {
     const full = normalize(key);
-    if (!dev.interfaces[full]) throw new Error(`Unknown interface ${key}`);
+    if (!dev.interfaces[full]) {
+      if (!full.startsWith('Port-channel')) throw new Error(`Unknown interface ${key}`);
+      dev.interfaces[full] = { name: full, shutdown: false, connected: false, mode: 'dynamic', accessVlan: 1, trunkAllowed: 'all', nativeVlan: 1 };
+    }
     Object.assign(dev.interfaces[full], patch);
     if (patch.accessVlan && !dev.vlans[patch.accessVlan]) dev.vlans[patch.accessVlan] = { id: patch.accessVlan, name: `VLAN${String(patch.accessVlan).padStart(4, '0')}` };
   }

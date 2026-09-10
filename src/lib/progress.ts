@@ -33,6 +33,26 @@ export function saveLabProgress(labId: string, progress: LabProgress): ProgressM
   return all;
 }
 
+const UNLOCK_KEY = 'netlab-unlock-all';
+
+/** Practice mode: ignore the sequential unlock and open every lab. */
+export function loadUnlockAll(): boolean {
+  try {
+    return localStorage.getItem(UNLOCK_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveUnlockAll(value: boolean) {
+  try {
+    if (value) localStorage.setItem(UNLOCK_KEY, '1');
+    else localStorage.removeItem(UNLOCK_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 export function resetProgress() {
   try {
     localStorage.removeItem(KEY);

@@ -151,6 +151,26 @@ export interface InterfaceState {
   /** "ip nat inside" / "ip nat outside". */
   natRole?: 'inside' | 'outside';
   ipv6?: Ipv6InterfaceConfig;
+  /** Member of an EtherChannel: "channel-group <id> mode <mode>". */
+  channelGroup?: { id: number; mode: ChannelMode };
+  portSecurity?: PortSecurity;
+  /** Put into err-disabled by a port-security violation; cleared by shutdown / no shutdown. */
+  errDisabled?: boolean;
+}
+
+export type ChannelMode = 'on' | 'active' | 'passive' | 'desirable' | 'auto';
+
+export interface PortSecurity {
+  enabled: boolean;
+  maximum: number;
+  violation: 'shutdown' | 'restrict' | 'protect';
+  sticky: boolean;
+  staticMacs: string[];
+  stickyMacs: string[];
+  /** Dynamically learned secure addresses (not saved to the config). */
+  learnedMacs: string[];
+  violations: number;
+  lastViolationMac?: string;
 }
 
 export interface VlanState {

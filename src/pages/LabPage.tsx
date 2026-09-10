@@ -5,9 +5,9 @@ import Objectives from '../components/Objectives';
 import ResultsModal from '../components/ResultsModal';
 import Terminal from '../components/Terminal';
 import Topology from '../components/Topology';
-import { getLab, labNetwork, nextLab, type Lab } from '../content';
+import { getLab, isLabUnlocked, labNetwork, nextLab, previousLab, type Lab } from '../content';
 import { executeHost, executeOn, grade, hostPrompt, isMaskedInput, prompt, tabComplete, type GradeResult, type NetworkState } from '../engine';
-import { saveLabProgress } from '../lib/progress';
+import { loadProgress, loadUnlockAll, saveLabProgress } from '../lib/progress';
 import { clearSession, loadSession, saveSession, type LabSession, type TermLine } from '../lib/session';
 
 function welcome(title: string, network: NetworkState, nodeId: string): TermLine[] {
@@ -60,6 +60,32 @@ export default function LabPage() {
           <Link to="/" className="text-accent hover:underline">
             Back to the lab list
           </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isLabUnlocked(lab.id, loadProgress(), loadUnlockAll())) {
+    const prev = previousLab(lab.id);
+    return (
+      <div className="flex h-full flex-col">
+        <Header />
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
+          <p className="text-3xl" aria-hidden>
+            🔒
+          </p>
+          <p className="text-lg font-semibold text-fg-bright">{lab.title} is locked</p>
+          <p className="max-w-md text-sm text-muted">Labs unlock in order. Pass {prev ? <strong className="text-fg">{prev.title}</strong> : 'the previous lab'} first, or turn on "Unlock all labs" on the lab list.</p>
+          <div className="flex gap-3">
+            {prev && (
+              <Link to={`/lab/${prev.id}`} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
+                Go to {prev.title} →
+              </Link>
+            )}
+            <Link to="/" className="rounded-lg border border-border px-4 py-1.5 text-sm hover:bg-surface-2">
+              Lab list
+            </Link>
+          </div>
         </div>
       </div>
     );

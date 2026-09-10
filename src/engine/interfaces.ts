@@ -2,9 +2,14 @@ const TYPES = [
   { full: 'GigabitEthernet', short: 'Gi' },
   { full: 'FastEthernet', short: 'Fa' },
   { full: 'Ethernet', short: 'Et' },
+  { full: 'Port-channel', short: 'Po' },
   { full: 'Loopback', short: 'Lo' },
   { full: 'Vlan', short: 'Vl' },
 ] as const;
+
+export function isPortChannel(name: string): boolean {
+  return name.startsWith('Port-channel');
+}
 
 /**
  * Turn any IOS interface spelling into the canonical full name.
@@ -13,17 +18,17 @@ const TYPES = [
  */
 export function normalizeInterfaceName(raw: string): string | null {
   const compact = raw.trim().toLowerCase().replace(/\s+/g, '');
-  const m = compact.match(/^([a-z]+)(\d[\d/.]*)$/);
+  const m = compact.match(/^([a-z-]+?)(\d[\d/.]*)$/);
   if (!m) return null;
   const [, prefix, number] = m;
-  const type = TYPES.find((t) => t.full.toLowerCase().startsWith(prefix));
+  const type = TYPES.find((t) => t.full.toLowerCase().startsWith(prefix) || t.full.toLowerCase().replace('-', '').startsWith(prefix.replace('-', '')));
   if (!type) return null;
   return `${type.full}${number}`;
 }
 
 /** "GigabitEthernet0/1" -> "Gi0/1" */
 export function shortInterfaceName(full: string): string {
-  const m = full.match(/^([A-Za-z]+)(.*)$/);
+  const m = full.match(/^([A-Za-z-]+?)(\d.*)$/);
   if (!m) return full;
   const type = TYPES.find((t) => t.full === m[1]);
   return `${type ? type.short : m[1]}${m[2]}`;
@@ -40,7 +45,7 @@ export function sviVlanId(full: string): number | null {
 
 /** Sort interfaces the way IOS lists them: physical ports first (by slot/port), then loopbacks, SVIs last. */
 export function compareInterfaceNames(a: string, b: string): number {
-  const rank = (n: string) => (isSvi(n) ? 2 : n.startsWith('Loopback') ? 1 : 0);
+  const rank = (n: string) => (isSvi(n) ? 3 : n.startsWith('Loopback') ? 2 : isPortChannel(n) ? 1 : 0);
   if (rank(a) !== rank(b)) return rank(a) - rank(b);
   const nums = (n: string) => (n.match(/\d+/g) ?? []).map(Number);
   const na = nums(a);

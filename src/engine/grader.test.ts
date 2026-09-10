@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { labNetwork, labs } from '../content';
+import { isLabUnlocked, labNetwork, labs } from '../content';
 import { grade } from './grader';
 import { executeHost, executeOn, type NetworkState } from './index';
 
@@ -12,6 +12,26 @@ function run(net: NetworkState, ...lines: string[]): NetworkState {
     return n.hosts[node] ? executeHost(n, node, line).network : executeOn(n, node, line).network;
   }, net);
 }
+
+describe('lab unlock order', () => {
+  it('opens labs one at a time as the previous lab is passed', () => {
+    const [first, second, third] = labs;
+    expect(isLabUnlocked(first.id, {})).toBe(true);
+    expect(isLabUnlocked(second.id, {})).toBe(false);
+    expect(isLabUnlocked(second.id, { [first.id]: { score: 100 } })).toBe(true);
+    expect(isLabUnlocked(third.id, { [first.id]: { score: 100 } })).toBe(false);
+    expect(isLabUnlocked(third.id, {}, true)).toBe(true);
+  });
+
+  it('gates each module on the last lab of the previous one', () => {
+    const firstOfSecondModule = labs.find((l) => l.moduleId !== labs[0].moduleId)!;
+    const lastOfFirstModule = labs[labs.indexOf(firstOfSecondModule) - 1];
+    expect(lastOfFirstModule.moduleId).toBe(labs[0].moduleId);
+    const allButLast = Object.fromEntries(labs.filter((l) => l.moduleId === labs[0].moduleId && l.id !== lastOfFirstModule.id).map((l) => [l.id, {}]));
+    expect(isLabUnlocked(firstOfSecondModule.id, allButLast)).toBe(false);
+    expect(isLabUnlocked(firstOfSecondModule.id, { ...allButLast, [lastOfFirstModule.id]: {} })).toBe(true);
+  });
+});
 
 describe('labs are well formed', () => {
   it('have unique ids and at least one objective', () => {
@@ -58,7 +78,12 @@ describe('reference solutions pass', () => {
     'sec-01-encrypt-the-passwords': ['enable', 'cisco', 'conf t', 'enable secret S3cret!', 'service password-encryption', 'end', 'show running-config'],
     'sec-02-remote-access-ssh': ['en', 'conf t', 'ip domain-name lab.local', 'crypto key generate rsa modulus 2048', 'ip ssh version 2', 'username netadmin privilege 15 secret N3t-adm1n', 'line vty 0 4', 'login local', 'transport input ssh', 'end', 'show ip ssh'],
     'sec-03-park-unused-ports': ['en', 'conf t', 'vlan 999', 'name UNUSED', 'interface range g0/3 - 7', 'switchport mode access', 'switchport access vlan 999', 'shutdown', 'end', 'show interfaces status'],
-    'sec-04-exam-harden-the-switch': ['en', 'conf t', 'hostname Secure-SW1', 'banner motd #Authorized access only#', 'enable secret H4rden!', 'service password-encryption', 'username admin privilege 15 secret Adm1n-Sec', 'line con 0', 'password c0nsole', 'login', 'line vty 0 4', 'login local', 'transport input ssh', 'exit', 'ip domain-name lab.local', 'crypto key generate rsa modulus 2048', 'ip ssh version 2', 'interface range g0/3 - 7', 'shutdown', 'end', 'write memory'],
+    'sec-04-lock-a-port': ['en', 'conf t', 'int g0/1', 'switchport mode access', 'switchport port-security', 'switchport port-security maximum 1', 'switchport port-security violation shutdown', 'switchport port-security mac-address sticky', 'end', 'PC-A: ping 192.168.1.20', 'show port-security interface g0/1', 'show running-config'],
+    'sec-05-err-disabled-port': ['en', 'show interfaces status', 'show port-security interface g0/1', 'conf t', 'int g0/1', 'no switchport port-security mac-address 0011.22aa.00ff', 'switchport port-security mac-address sticky', 'shutdown', 'no shutdown', 'end', 'PC-A: ping 192.168.1.20'],
+    'sec-06-exam-harden-the-switch': ['en', 'conf t', 'hostname Secure-SW1', 'banner motd #Authorized access only#', 'enable secret H4rden!', 'service password-encryption', 'username admin privilege 15 secret Adm1n-Sec', 'line con 0', 'password c0nsole', 'login', 'line vty 0 4', 'login local', 'transport input ssh', 'exit', 'ip domain-name lab.local', 'crypto key generate rsa modulus 2048', 'ip ssh version 2', 'interface range g0/1 - 2', 'switchport mode access', 'switchport port-security', 'switchport port-security mac-address sticky', 'interface range g0/3 - 7', 'shutdown', 'end', 'write memory'],
+    'ec-01-lacp-bundle': ['en', 'conf t', 'interface range g0/7 - 8', 'channel-group 1 mode active', 'interface port-channel 1', 'switchport mode trunk', 'end', 'show etherchannel summary', 'PC-A: ping 192.168.10.12'],
+    'ec-02-channel-never-forms': ['en', 'show etherchannel summary', 'conf t', 'interface range g0/7 - 8', 'channel-group 1 mode active', 'end', 'show etherchannel summary'],
+    'ec-03-pagp-and-static': ['en', 'conf t', 'interface range g0/7 - 8', 'channel-group 1 mode desirable', 'interface port-channel 1', 'switchport mode trunk', 'end', 'show etherchannel summary', 'PC-B: ping 192.168.20.12'],
     'rt-01-meet-the-router': ['en', 'show ip interface brief', 'conf t', 'int g0/0', 'ip address 192.168.1.1 255.255.255.0', 'no shutdown', 'end', 'show ip route', 'ping 192.168.1.10'],
     'rt-02-connect-two-routers': ['en', 'conf t', 'int g0/1', 'ip address 10.0.0.1 255.255.255.252', 'no shutdown', 'end', 'show ip route', 'ping 10.0.0.2'],
     'rt-03-first-static-route': ['PC-A: ping 192.168.2.10', 'en', 'conf t', 'ip route 192.168.2.0 255.255.255.0 10.0.0.2', 'end', 'show ip route', 'PC-A: ping 192.168.2.10'],
