@@ -158,14 +158,14 @@ export function interfaceStatus(i: InterfaceState): 'connected' | 'notconnect' |
 }
 
 export function showInterfacesStatus(state: DeviceState): string[] {
-  const out = ['Port      Name               Status       Vlan       Duplex  Speed Type'];
+  const out = ['Port      Name               Status       Vlan       Duplex  Speed  Type'];
   for (const i of physicalInterfaces(state)) {
     const status = interfaceStatus(i);
     const vlan = i.mode === 'trunk' ? 'trunk' : String(i.accessVlan);
     const duplex = status === 'connected' ? 'a-full' : 'auto';
     const speed = status === 'connected' ? 'a-1000' : 'auto';
     out.push(
-      `${shortInterfaceName(i.name).padEnd(10)}${(i.description ?? '').slice(0, 18).padEnd(19)}${status.padEnd(13)}${vlan.padEnd(11)}${duplex.padEnd(8)}${speed.padEnd(6)}10/100/1000BaseTX`,
+      `${shortInterfaceName(i.name).padEnd(10)}${(i.description ?? '').slice(0, 18).padEnd(19)}${status.padEnd(13)}${vlan.padEnd(11)}${duplex.padEnd(8)}${speed.padEnd(7)}10/100/1000BaseTX`,
     );
   }
   return out;
