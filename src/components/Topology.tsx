@@ -135,6 +135,8 @@ export default function Topology({ network, active, onSelect }: Props) {
                         {i.mode}
                         {i.channelGroup ? <span className="text-muted"> po{i.channelGroup.id}</span> : null}
                         {i.portSecurity?.enabled ? <span className="text-muted"> sec</span> : null}
+                        {i.portfast ? <span className="text-muted"> edge</span> : null}
+                        {i.bpduGuard ? <span className="text-muted"> bpduguard</span> : null}
                       </td>
                       <td className="py-1">{i.mode === 'trunk' ? 'trunk' : i.accessVlan}</td>
                       <td className={`py-1 ${color}`}>● {status}</td>

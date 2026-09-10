@@ -1,6 +1,6 @@
 import type { Acl, DeviceState, InterfaceState } from '../types';
 import { compareInterfaceNames, isPortChannel, isSvi, shortInterfaceName } from '../interfaces';
-import { ifaceIpv6, isLoopback, isSubinterface, type ChannelStatus, type MacEntry, type OspfInterfaceInfo, type OspfNeighbor, type RouteEntry, type RouteEntry6 } from '../network';
+import { ifaceIpv6, isLoopback, isSubinterface, type ChannelStatus, type MacEntry, type OspfInterfaceInfo, type OspfNeighbor, type RouteEntry, type RouteEntry6, type StpVlanInfo } from '../network';
 import { ruleText } from '../acl';
 import { networkAddress6 } from '../ipv6';
 import { classfulNetwork, ipToInt, prefixLength } from './net';
@@ -412,7 +412,9 @@ function renderSwitchConfigBody(state: DeviceState): string[] {
   out.push('no aaa new-model', 'system mtu routing 1500', '!');
   if (state.ipDomainName) out.push(`ip domain-name ${state.ipDomainName}`, '!');
   if (state.sshVersion) out.push(`ip ssh version ${state.sshVersion}`, '!');
-  out.push('spanning-tree mode pvst', 'spanning-tree extend system-id', '!', 'vlan internal allocation policy ascending', '!');
+  out.push(`spanning-tree mode ${state.stpMode}`, 'spanning-tree extend system-id');
+  for (const [v, p] of Object.entries(state.stpPriority).sort((a, b) => Number(a[0]) - Number(b[0]))) out.push(`spanning-tree vlan ${v} priority ${p}`);
+  out.push('!', 'vlan internal allocation policy ascending', '!');
   const userVlans = Object.values(state.vlans)
     .filter((v) => v.id !== 1 && v.id < 1002)
     .sort((a, b) => a.id - b.id);
@@ -441,6 +443,9 @@ function renderSwitchConfigBody(state: DeviceState): string[] {
         for (const m of ps.staticMacs) out.push(` switchport port-security mac-address ${m}`);
       }
       if (i.channelGroup) out.push(` channel-group ${i.channelGroup.id} mode ${i.channelGroup.mode}`);
+      if (i.portfast) out.push(' spanning-tree portfast');
+      if (i.bpduGuard) out.push(' spanning-tree bpduguard enable');
+      if (i.stpCost !== undefined) out.push(` spanning-tree cost ${i.stpCost}`);
     }
     if (i.shutdown) out.push(' shutdown');
     out.push('!');
@@ -571,7 +576,7 @@ const ROUTE_CODES = [
 function routeText(e: RouteEntry): string {
   const dest = `${e.destination}/${e.prefix}`;
   if (e.source === 'static') return e.nextHop ? `${dest} [${e.adminDistance}/${e.metric}] via ${e.nextHop}` : `${dest} is directly connected, ${e.exitInterface}`;
-  if (e.source === 'ospf' || e.source === 'ospf-external') return `${dest} [${e.adminDistance}/${e.metric}] via ${e.nextHop}, 00:02:14, ${e.exitInterface}`;
+  if (e.source === 'ospf' || e.source === 'ospf-ia' || e.source === 'ospf-external') return `${dest} [${e.adminDistance}/${e.metric}] via ${e.nextHop}, 00:02:14, ${e.exitInterface}`;
   return `${dest} is directly connected, ${e.exitInterface}`;
 }
 
@@ -579,6 +584,7 @@ function routeCode(e: RouteEntry): string {
   if (e.source === 'connected') return 'C';
   if (e.source === 'local') return 'L';
   if (e.source === 'ospf') return 'O';
+  if (e.source === 'ospf-ia') return 'O IA';
   if (e.source === 'ospf-external') return e.candidateDefault ? 'O*E2' : 'O E2';
   return e.candidateDefault ? 'S*' : 'S';
 }
@@ -710,18 +716,17 @@ export function showInterfaceSwitchport(state: DeviceState, i: InterfaceState): 
   ];
 }
 
-export function showSpanningTree(state: DeviceState): string[] {
+export function showSpanningTree(instances: StpVlanInfo[]): string[] {
   const out: string[] = [];
-  const vlans = Object.values(state.vlans)
-    .filter((v) => v.id < 1002)
-    .sort((a, b) => a.id - b.id);
-  for (const v of vlans) {
-    const ports = physicalInterfaces(state).filter((i) => !i.shutdown && i.connected && (i.mode === 'trunk' || i.accessVlan === v.id));
-    if (ports.length === 0) continue;
-    out.push(`VLAN${String(v.id).padStart(4, '0')}`, '  Spanning tree enabled protocol ieee', `  Root ID    Priority    ${32768 + v.id}`, '             This bridge is the root', '');
+  for (const v of instances) {
+    out.push(`VLAN${String(v.vlan).padStart(4, '0')}`, `  Spanning tree enabled protocol ${v.protocol}`, `  Root ID    Priority    ${v.rootPriority}`, `             Address     ${v.rootMac}`);
+    if (v.isRoot) out.push('             This bridge is the root');
+    else out.push(`             Cost        ${v.rootCost}`, `             Port        ${v.rootPort ? `${v.ports.find((p) => p.name === v.rootPort)?.portId.split('.')[1] ?? ''} (${v.rootPort})` : 'none'}`);
+    out.push('             Hello Time   2 sec  Max Age 20 sec  Forward Delay 15 sec', '');
+    out.push(`  Bridge ID  Priority    ${v.bridgePriority}  (priority ${v.bridgePriority - v.vlan} sys-id-ext ${v.vlan})`, `             Address     ${v.bridgeMac}`, '             Hello Time   2 sec  Max Age 20 sec  Forward Delay 15 sec', '             Aging Time  300 sec', '');
     out.push('Interface           Role Sts Cost      Prio.Nbr Type', '------------------- ---- --- --------- -------- --------------------------------');
-    for (const p of ports) out.push(`${shortInterfaceName(p.name).padEnd(20)}Desg FWD 4         128.${p.name.match(/\d+$/)?.[0] ?? '1'}    P2p`);
-    out.push('');
+    for (const p of v.ports) out.push(`${shortInterfaceName(p.name).padEnd(20)}${p.role} ${p.state} ${String(p.cost).padEnd(10)}${p.portId.padEnd(9)}P2p${p.edge ? ' Edge' : ''}`);
+    out.push('', '');
   }
   return out.length ? out : ['No spanning tree instance exists.'];
 }

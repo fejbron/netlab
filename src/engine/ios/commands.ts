@@ -4,7 +4,7 @@ import { isPortChannel, isSvi, normalizeInterfaceName, shortInterfaceName, sviVl
 import { isExtendedNumber, isStandardNumber, nextSeq, parseExtendedRule, parseStandardRule } from '../acl';
 import { eui64Address, isIpv6, isLinkLocal6, normalizeIpv6, parsePrefix6 } from '../ipv6';
 import { clearTranslations } from '../nat';
-import { applyAclHits, channelMembers, channelStatus, isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, portChannelId, routerMac, routingTable, routingTable6, type NetworkState } from '../network';
+import { applyAclHits, channelMembers, channelStatus, isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, portChannelId, routerMac, routingTable, routingTable6, stpVlan, type NetworkState } from '../network';
 import { intToIp, ipToInt, isValidIp, isValidMask, networkAddress, parseVlanList } from './net';
 import {
   defaultVlanName,
@@ -178,6 +178,12 @@ export const WORD_HELP: Record<string, string> = {
   'mac-address': 'Secure mac address',
   sticky: 'Configure dynamic secure addresses as sticky',
   'port-channel': 'Ethernet Channel of interfaces',
+  portfast: 'Enable an interface to move directly to forwarding on link up',
+  bpduguard: 'Don\'t accept BPDUs on this interface',
+  'rapid-pvst': 'Per-Vlan rapid spanning tree mode',
+  pvst: 'Per-Vlan spanning tree mode',
+  primary: 'Configure this switch as primary root for this spanning tree',
+  secondary: 'Configure switch as secondary root',
 };
 
 // ---------------------------------------------------------------------------
@@ -546,7 +552,26 @@ const SHOW_SWITCH_USER: Def[] = [
       return i ? showPortSecurityInterface(i) : [INVALID_INPUT];
     },
   },
-  { pattern: 'show spanning-tree', help: 'Spanning tree topology', run: ({ state }) => showSpanningTree(state) },
+  {
+    pattern: 'show spanning-tree',
+    help: 'Spanning tree topology',
+    run: ({ state, network, nodeId }) =>
+      showSpanningTree(
+        Object.keys(state.vlans)
+          .map(Number)
+          .filter((v) => v < 1002)
+          .map((v) => stpVlan(network, nodeId, v))
+          .filter((x): x is NonNullable<typeof x> => x !== null && x.ports.length > 0),
+      ),
+  },
+  {
+    pattern: 'show spanning-tree vlan <vlan>',
+    help: 'VLAN Switch Spanning Trees',
+    run: ({ network, nodeId }, a) => {
+      const info = /^\d+$/.test(a.vlan) ? stpVlan(network, nodeId, Number(a.vlan)) : null;
+      return info ? showSpanningTree([info]) : [`Spanning tree instance(s) for vlan ${a.vlan} does not exist.`];
+    },
+  },
   { pattern: 'show storm-control', help: 'Show packet storm control configuration', run: () => ['Interface  Filter State   Upper        Lower        Current'] },
   {
     pattern: 'show ip route',
@@ -566,7 +591,7 @@ const SHOW_ROUTER_USER: Def[] = [
   ...SHOW_COMMON_USER,
   { pattern: 'show ip route', help: 'IP routing table', run: ({ network, nodeId }) => showIpRoute(routingTable(network, nodeId)) },
   { pattern: 'show ip route static', help: 'Static routes', run: ({ network, nodeId }) => showIpRoute(routingTable(network, nodeId).filter((e) => e.source === 'static')) },
-  { pattern: 'show ip route ospf', help: 'Open Shortest Path First (OSPF)', run: ({ network, nodeId }) => showIpRoute(routingTable(network, nodeId).filter((e) => e.source === 'ospf' || e.source === 'ospf-external')) },
+  { pattern: 'show ip route ospf', help: 'Open Shortest Path First (OSPF)', run: ({ network, nodeId }) => showIpRoute(routingTable(network, nodeId).filter((e) => e.source === 'ospf' || e.source === 'ospf-ia' || e.source === 'ospf-external')) },
   { pattern: 'show ip ospf neighbor', help: 'Neighbor list', run: ({ state, network, nodeId }) => (state.ospf ? showIpOspfNeighbor(ospfNeighbors(network, nodeId)) : ['%OSPF: No router process configured']) },
   { pattern: 'show ip ospf interface brief', help: 'Brief summary of OSPF interfaces', run: (ctx) => ospfBrief(ctx) },
   { pattern: 'show ip ospf interface', help: 'Interface information', run: (ctx) => ospfBrief(ctx) },
@@ -761,7 +786,14 @@ export const GLOBAL_CONFIG: Def[] = [
   ...GLOBAL_COMMON,
   { pattern: 'ip default-gateway <address>', help: 'Specify default gateway (if not routing IP)', run: ({ state }, a) => { if (!isValidIp(a.address)) return [INVALID_INPUT]; state.ipDefaultGateway = a.address; } },
   { pattern: 'no ip default-gateway', help: 'Remove default gateway', run: ({ state }) => void (state.ipDefaultGateway = undefined) },
-  { pattern: 'spanning-tree mode <mode>', help: 'Spanning tree operating mode', run: () => undefined },
+  { pattern: 'spanning-tree mode pvst', help: 'Per-Vlan spanning tree mode', run: ({ state }) => void (state.stpMode = 'pvst') },
+  { pattern: 'spanning-tree mode rapid-pvst', help: 'Per-Vlan rapid spanning tree mode', run: ({ state }) => void (state.stpMode = 'rapid-pvst') },
+  { pattern: 'spanning-tree vlan <list> priority <priority>', help: 'Set the bridge priority for the spanning tree', run: ({ state }, a) => { const list = parseVlanList(a.list); const p = Number(a.priority); if (!list || !/^\d+$/.test(a.priority) || p > 61440) return [INVALID_INPUT]; if (p % 4096 !== 0) return ['% Bridge Priority must be in increments of 4096.', '% Allowed values are:', '  0     4096  8192  12288 16384 20480 24576 28672', '  32768 36864 40960 45056 49152 53248 57344 61440']; for (const v of list) state.stpPriority[v] = p; } },
+  { pattern: 'no spanning-tree vlan <list> priority', help: 'Reset the bridge priority', run: ({ state }, a) => { const list = parseVlanList(a.list); if (!list) return [INVALID_INPUT]; for (const v of list) delete state.stpPriority[v]; } },
+  { pattern: 'spanning-tree vlan <list> root primary', help: 'Configure this switch as primary root for this spanning tree', run: ({ state }, a) => { const list = parseVlanList(a.list); if (!list) return [INVALID_INPUT]; for (const v of list) state.stpPriority[v] = 24576; } },
+  { pattern: 'spanning-tree vlan <list> root secondary', help: 'Configure switch as secondary root', run: ({ state }, a) => { const list = parseVlanList(a.list); if (!list) return [INVALID_INPUT]; for (const v of list) state.stpPriority[v] = 28672; } },
+  { pattern: 'no spanning-tree vlan <list> root', help: 'Reset the root configuration', run: ({ state }, a) => { const list = parseVlanList(a.list); if (!list) return [INVALID_INPUT]; for (const v of list) delete state.stpPriority[v]; } },
+  { pattern: 'spanning-tree extend system-id', help: 'Extend system-id into priority portion of the bridge id', run: () => undefined },
 ];
 
 function addStaticRoute(state: DeviceState, dest: string, mask: string, via: string, ad?: string): string[] | void {
@@ -1054,6 +1086,14 @@ export const INTERFACE_CONFIG: Def[] = [
   { pattern: 'no channel-group <number>', help: 'Remove the port from its channel group', run: ({ state }) => forEachTarget(state, (i) => void (i.channelGroup = undefined)) },
   { pattern: 'channel-protocol lacp', help: 'Prepare interface for LACP protocol', run: () => undefined },
   { pattern: 'channel-protocol pagp', help: 'Prepare interface for PAgP protocol', run: () => undefined },
+  // Spanning tree
+  { pattern: 'spanning-tree portfast', help: 'Enable an interface to move directly to forwarding on link up', run: ({ state }) => l2(state, (i) => { i.portfast = true; return i.mode === 'trunk' ? ['%Warning: portfast should only be enabled on ports connected to a single', ' host. Connecting hubs, concentrators, switches, bridges, etc... to this', ' interface  when portfast is enabled, can cause temporary bridging loops.', ' Use with CAUTION'] : ['%Warning: portfast should only be enabled on ports connected to a single', ' host. Connecting hubs, concentrators, switches, bridges, etc... to this', ' interface  when portfast is enabled, can cause temporary bridging loops.', ' Use with CAUTION', '', `%Portfast has been configured on ${i.name} but will only`, ' have effect when the interface is in a non-trunking mode.']; }) },
+  { pattern: 'no spanning-tree portfast', help: 'Disable portfast', run: ({ state }) => l2(state, (i) => void (i.portfast = undefined)) },
+  { pattern: 'spanning-tree bpduguard enable', help: 'Enable BPDU guard for this interface', run: ({ state }) => l2(state, (i) => void (i.bpduGuard = true)) },
+  { pattern: 'spanning-tree bpduguard disable', help: 'Disable BPDU guard for this interface', run: ({ state }) => l2(state, (i) => void (i.bpduGuard = undefined)) },
+  { pattern: 'no spanning-tree bpduguard', help: 'Disable BPDU guard for this interface', run: ({ state }) => l2(state, (i) => void (i.bpduGuard = undefined)) },
+  { pattern: 'spanning-tree cost <cost>', help: 'Change an interface\'s spanning tree port path cost', run: ({ state }, a) => { const c = Number(a.cost); if (!/^\d+$/.test(a.cost) || c < 1 || c > 200000000) return [INVALID_INPUT]; return l2(state, (i) => void (i.stpCost = c)); } },
+  { pattern: 'no spanning-tree cost', help: 'Reset the port path cost', run: ({ state }) => l2(state, (i) => void (i.stpCost = undefined)) },
   // Port security
   {
     pattern: 'switchport port-security',

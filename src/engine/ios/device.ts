@@ -194,6 +194,11 @@ export interface SwitchOptions {
   /** Node id inside a network; defaults to the hostname. */
   id?: string;
   hostname?: string;
+  /** Bridge MAC address; lower wins spanning-tree ties. Derived from the id by default. */
+  mac?: string;
+  stpMode?: 'pvst' | 'rapid-pvst';
+  /** Spanning-tree priority per VLAN, e.g. { 1: 4096 }. */
+  stpPriority?: Record<number, number>;
   /** Number of GigabitEthernet0/N ports. */
   ports?: number;
   /** Legacy single-device topology; prefer buildNetwork() for multi-device labs. */
@@ -235,6 +240,9 @@ function baseDevice(id: string, hostname: string, deviceType: DeviceState['devic
     natTranslations: [],
     ipv6UnicastRouting: false,
     staticRoutes6: [],
+    mac: deviceMac(id),
+    stpMode: 'pvst',
+    stpPriority: {},
     users: [],
     lines: { con: { login: false }, vty: { login: false } },
     servicePasswordEncryption: false,
@@ -253,9 +261,19 @@ function normalize(name: string): string {
   return full;
 }
 
+/** Deterministic base MAC for a device id, e.g. "0011.2233.1a2b". */
+function deviceMac(id: string): string {
+  let h = 5381;
+  for (const c of id) h = ((h * 33) ^ c.charCodeAt(0)) >>> 0;
+  return `0011.2233.${h.toString(16).padStart(8, '0').slice(-4)}`;
+}
+
 export function createSwitch(options: SwitchOptions = {}): DeviceState {
   const hostname = options.hostname ?? 'Switch';
   const dev = baseDevice(options.id ?? hostname, hostname, 'switch');
+  if (options.mac) dev.mac = options.mac;
+  if (options.stpMode) dev.stpMode = options.stpMode;
+  if (options.stpPriority) dev.stpPriority = { ...options.stpPriority };
   const ports = options.ports ?? 8;
   for (let n = 1; n <= ports; n++) {
     const name = `GigabitEthernet0/${n}`;

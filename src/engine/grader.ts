@@ -1,7 +1,7 @@
 import { normalizeInterfaceName } from './interfaces';
 import { isIpv6, normalizeIpv6, parsePrefix6 } from './ipv6';
 import { renderConfigBody } from './ios/show';
-import { channelStatus, ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, type ChannelProtocol, type NetworkState, type RouteEntry } from './network';
+import { channelStatus, ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, stpRoot, stpVlan, type ChannelProtocol, type NetworkState, type RouteEntry } from './network';
 import type { AclAddr, AclEntry, AclProtocol, CliErrorKind, DeviceState, LineState, Mode, PortMode } from './types';
 
 interface Base {
@@ -33,6 +33,7 @@ export type Check = Base &
         ipAddress?: string;
         subnetMask?: string;
         encapsulation?: number;
+        errDisabled?: boolean;
       }
     | { type: 'enable-secret'; equals?: string }
     | { type: 'enable-password'; equals?: string }
@@ -85,6 +86,11 @@ export type Check = Base &
     /** EtherChannel group state; `members` must all be in the group, `mode` is the Port-channel's switchport mode. */
     | { type: 'etherchannel'; group: number; bundled?: boolean; protocol?: ChannelProtocol; members?: string[]; mode?: PortMode }
     | { type: 'port-security'; interface: string; enabled?: boolean; maximum?: number; violation?: 'shutdown' | 'restrict' | 'protect'; sticky?: boolean; mac?: string; secured?: number; errDisabled?: boolean }
+    /** The device (default primary) is the spanning-tree root for the VLAN. */
+    | { type: 'stp-root'; vlan: number }
+    | { type: 'stp-priority'; vlan: number; priority?: number; max?: number }
+    | { type: 'stp-mode'; mode: 'pvst' | 'rapid-pvst' }
+    | { type: 'stp-port'; interface: string; vlan?: number; role?: 'Root' | 'Desg' | 'Altn'; state?: 'FWD' | 'BLK'; portfast?: boolean; bpduGuard?: boolean }
   );
 
 export interface Objective {
@@ -212,6 +218,14 @@ function describe(check: Check): string {
       return `Port-channel ${check.group}${check.bundled === true ? ' is bundled' : check.bundled === false ? ' is not bundled' : ''}${check.protocol ? ` using ${check.protocol === '-' ? 'static mode' : check.protocol}` : ''}${check.members ? ` with ${check.members.join(', ')}` : ''}${check.mode ? ` as ${check.mode}` : ''}${on}`;
     case 'port-security':
       return `${check.interface}: port security${check.enabled === false ? ' disabled' : ''}${check.maximum ? ` maximum ${check.maximum}` : ''}${check.violation ? ` violation ${check.violation}` : ''}${check.sticky ? ' sticky' : ''}${check.mac ? ` secures ${check.mac}` : ''}${check.errDisabled === false ? ' (not err-disabled)' : check.errDisabled ? ' (err-disabled)' : ''}${on}`;
+    case 'stp-root':
+      return `${check.device ?? 'This switch'} is the root bridge for VLAN ${check.vlan}`;
+    case 'stp-priority':
+      return `VLAN ${check.vlan} priority${check.priority !== undefined ? ` is ${check.priority}` : check.max !== undefined ? ` is at most ${check.max}` : ' is set'}${on}`;
+    case 'stp-mode':
+      return `Spanning-tree mode is ${check.mode}${on}`;
+    case 'stp-port':
+      return `${check.interface}${check.role ? ` is a ${check.role} port` : ''}${check.state ? ` (${check.state})` : ''}${check.portfast ? ' with PortFast' : ''}${check.bpduGuard ? ' and BPDU guard' : ''}${check.vlan ? ` in VLAN ${check.vlan}` : ''}${on}`;
   }
 }
 
@@ -295,6 +309,7 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
       if (check.mode !== undefined && i.mode !== check.mode) return false;
       if (check.accessVlan !== undefined && i.accessVlan !== check.accessVlan) return false;
       if (check.shutdown !== undefined && i.shutdown !== check.shutdown) return false;
+      if (check.errDisabled !== undefined && Boolean(i.errDisabled) !== check.errDisabled) return false;
       if (check.description !== undefined && (i.description ?? '').toLowerCase() !== check.description.toLowerCase()) return false;
       if (check.trunkAllowed !== undefined && !sameList(i.trunkAllowed, check.trunkAllowed)) return false;
       if (check.nativeVlan !== undefined && i.nativeVlan !== check.nativeVlan) return false;
@@ -482,6 +497,31 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
       if (check.mac !== undefined && ![...ps.staticMacs, ...ps.stickyMacs].includes(check.mac.toLowerCase())) return false;
       if (check.secured !== undefined && ps.staticMacs.length + ps.stickyMacs.length + ps.learnedMacs.length < check.secured) return false;
       if (check.errDisabled !== undefined && Boolean(i.errDisabled) !== check.errDisabled) return false;
+      return true;
+    }
+    case 'stp-root':
+      return stpRoot(net, check.vlan) === state.id;
+    case 'stp-priority': {
+      const p = state.stpPriority[check.vlan];
+      if (check.priority !== undefined) return (p ?? 32768) === check.priority;
+      if (check.max !== undefined) return (p ?? 32768) <= check.max;
+      return p !== undefined;
+    }
+    case 'stp-mode':
+      return state.stpMode === check.mode;
+    case 'stp-port': {
+      const name = normalizeInterfaceName(check.interface);
+      const i = name ? state.interfaces[name] : undefined;
+      if (!i) return false;
+      if (check.portfast !== undefined && Boolean(i.portfast) !== check.portfast) return false;
+      if (check.bpduGuard !== undefined && Boolean(i.bpduGuard) !== check.bpduGuard) return false;
+      if (check.role !== undefined || check.state !== undefined) {
+        const info = stpVlan(net, state.id, check.vlan ?? 1);
+        const port = info?.ports.find((p) => p.name === name);
+        if (!port) return false;
+        if (check.role !== undefined && port.role !== check.role) return false;
+        if (check.state !== undefined && port.state !== check.state) return false;
+      }
       return true;
     }
   }

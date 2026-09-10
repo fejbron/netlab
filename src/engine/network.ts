@@ -219,7 +219,213 @@ export function syncLinkState(net: NetworkState): void {
       if (isSubinterface(i.name)) i.connected = dev.interfaces[parentInterface(i.name)]?.connected ?? false;
       else if (isPortChannel(i.name)) i.connected = channelMembers(dev, i.name).some((m) => m.connected && !m.shutdown && !m.errDisabled);
     }
+    // BPDU guard: a switch on a guarded port puts it into err-disabled.
+    for (const i of Object.values(dev.interfaces)) {
+      if (!i.bpduGuard || i.shutdown || !i.connected) continue;
+      const p = peerOf(net, dev.id, i.name);
+      if (p && net.devices[p.node]?.deviceType === 'switch') i.errDisabled = true;
+    }
   }
+}
+
+// ---------------------------------------------------------------------------
+// spanning tree (per-VLAN)
+
+export interface StpPort {
+  name: string;
+  role: 'Root' | 'Desg' | 'Altn';
+  state: 'FWD' | 'BLK';
+  cost: number;
+  portId: string;
+  edge: boolean;
+}
+
+export interface StpVlanInfo {
+  vlan: number;
+  protocol: 'ieee' | 'rstp';
+  rootPriority: number;
+  rootMac: string;
+  bridgePriority: number;
+  bridgeMac: string;
+  isRoot: boolean;
+  rootCost: number;
+  rootPort?: string;
+  ports: StpPort[];
+}
+
+interface StpNode {
+  cost: number;
+  rootPort?: string;
+  /** Port name -> role/state for every participating port. */
+  ports: Map<string, StpPort>;
+}
+
+function bridgePriority(dev: DeviceState, vlan: number): number {
+  return (dev.stpPriority[vlan] ?? 32768) + vlan;
+}
+
+function compareBridge(a: { pri: number; mac: string }, b: { pri: number; mac: string }): number {
+  return a.pri - b.pri || a.mac.localeCompare(b.mac);
+}
+
+function portNumber(name: string): number {
+  const id = portChannelId(name);
+  if (id !== null) return 64 + id;
+  const m = name.match(/(\d+)$/);
+  return m ? Number(m[1]) : 0;
+}
+
+function stpPortId(i: InterfaceState): string {
+  return `128.${portNumber(i.name)}`;
+}
+
+function portCarriesVlan(i: InterfaceState, vlan: number): boolean {
+  return i.mode === 'trunk' ? allowsVlan(i, vlan) : i.accessVlan === vlan;
+}
+
+/** The logical STP port for a physical port: its Port-channel when bundled, otherwise itself. */
+function logicalPort(net: NetworkState, dev: DeviceState, i: InterfaceState): InterfaceState {
+  if (!i.channelGroup) return i;
+  const status = channelStatus(net, dev.id).find((c) => c.id === i.channelGroup!.id);
+  const bundled = status?.members.find((m) => m.name === i.name)?.flag === 'P';
+  return bundled ? (dev.interfaces[`Port-channel${i.channelGroup.id}`] ?? i) : i;
+}
+
+function stpCostOf(i: InterfaceState, dev: DeviceState): number {
+  if (i.stpCost !== undefined) return i.stpCost;
+  if (isPortChannel(i.name)) return channelMembers(dev, i.name).length >= 2 ? 3 : 4;
+  return 4;
+}
+
+/** Run the spanning-tree algorithm for one VLAN across every switch that has it. */
+function stpCompute(net: NetworkState, vlan: number): Map<string, StpNode> {
+  const switches = Object.values(net.devices).filter((d) => d.deviceType === 'switch' && d.vlans[vlan]);
+  const result = new Map<string, StpNode>();
+  if (switches.length === 0) return result;
+  const bid = new Map(switches.map((s) => [s.id, { pri: bridgePriority(s, vlan), mac: s.mac }]));
+
+  // Logical ports that participate in this VLAN, with their peers.
+  interface Edge {
+    a: string;
+    ap: InterfaceState;
+    b: string;
+    bp: InterfaceState;
+  }
+  const edges: Edge[] = [];
+  const participating = new Map<string, Map<string, InterfaceState>>();
+  const seenPair = new Set<string>();
+  for (const sw of switches) {
+    const ports = new Map<string, InterfaceState>();
+    for (const i of Object.values(sw.interfaces)) {
+      if (isSvi(i.name) || isPortChannel(i.name) || !ifaceUp(net, sw.id, i.name) || !portCarriesVlan(i, vlan)) continue;
+      const lp = logicalPort(net, sw, i);
+      ports.set(lp.name, lp);
+      const p = peerOf(net, sw.id, i.name);
+      if (!p) continue;
+      const peerDev = net.devices[p.node];
+      if (!peerDev || peerDev.deviceType !== 'switch' || !peerDev.vlans[vlan]) continue;
+      const peerPort = peerDev.interfaces[p.iface];
+      if (!peerPort || !ifaceUp(net, p.node, p.iface) || !portCarriesVlan(peerPort, vlan)) continue;
+      const peerLp = logicalPort(net, peerDev, peerPort);
+      const key = [`${sw.id}:${lp.name}`, `${p.node}:${peerLp.name}`].sort().join('|');
+      if (seenPair.has(key)) continue;
+      seenPair.add(key);
+      edges.push({ a: sw.id, ap: lp, b: p.node, bp: peerLp });
+    }
+    participating.set(sw.id, ports);
+  }
+
+  const root = switches.reduce((best, s) => (compareBridge(bid.get(s.id)!, bid.get(best.id)!) < 0 ? s : best));
+  // Dijkstra from the root; root path cost adds the cost of the receiving port.
+  const dist = new Map<string, { cost: number; viaBridge: { pri: number; mac: string }; viaPort: string; ownPort?: string }>();
+  dist.set(root.id, { cost: 0, viaBridge: bid.get(root.id)!, viaPort: '' });
+  const done = new Set<string>();
+  while (true) {
+    let cur: string | null = null;
+    for (const [n, d] of dist) if (!done.has(n) && (cur === null || d.cost < dist.get(cur)!.cost)) cur = n;
+    if (cur === null) break;
+    done.add(cur);
+    for (const e of edges) {
+      const [u, v, up, vp] = e.a === cur ? [e.a, e.b, e.ap, e.bp] : e.b === cur ? [e.b, e.a, e.bp, e.ap] : [null, null, null, null];
+      if (!u || !v || !up || !vp) continue;
+      const cand = { cost: dist.get(u)!.cost + stpCostOf(vp, net.devices[v]), viaBridge: bid.get(u)!, viaPort: stpPortId(up), ownPort: vp.name };
+      const existing = dist.get(v);
+      const better = !existing || cand.cost < existing.cost || (cand.cost === existing.cost && (compareBridge(cand.viaBridge, existing.viaBridge) < 0 || (compareBridge(cand.viaBridge, existing.viaBridge) === 0 && cand.viaPort < existing.viaPort)));
+      if (better) dist.set(v, cand);
+    }
+  }
+
+  for (const sw of switches) {
+    const d = dist.get(sw.id);
+    const node: StpNode = { cost: d?.cost ?? 0, rootPort: d?.ownPort, ports: new Map() };
+    for (const [name, lp] of participating.get(sw.id)!) {
+      node.ports.set(name, { name, role: 'Desg', state: 'FWD', cost: stpCostOf(lp, sw), portId: stpPortId(lp), edge: Boolean(lp.portfast) });
+    }
+    result.set(sw.id, node);
+  }
+  for (const e of edges) {
+    const da = dist.get(e.a);
+    const db = dist.get(e.b);
+    if (!da || !db) continue;
+    const aKey = { cost: da.cost, bridge: bid.get(e.a)!, port: stpPortId(e.ap) };
+    const bKey = { cost: db.cost, bridge: bid.get(e.b)!, port: stpPortId(e.bp) };
+    const aDesignated = aKey.cost - bKey.cost || compareBridge(aKey.bridge, bKey.bridge) || aKey.port.localeCompare(bKey.port, undefined, { numeric: true });
+    const loser = aDesignated <= 0 ? { sw: e.b, port: e.bp.name } : { sw: e.a, port: e.ap.name };
+    const node = result.get(loser.sw)!;
+    const port = node.ports.get(loser.port);
+    if (!port) continue;
+    if (node.rootPort === loser.port) {
+      port.role = 'Root';
+      port.state = 'FWD';
+    } else {
+      port.role = 'Altn';
+      port.state = 'BLK';
+    }
+  }
+  return result;
+}
+
+/** Ports (physical names) that spanning tree blocks on a switch for a VLAN. */
+export function stpBlockedPorts(net: NetworkState, swId: string, vlan: number): Set<string> {
+  const node = stpCompute(net, vlan).get(swId);
+  const blocked = new Set<string>();
+  if (!node) return blocked;
+  const dev = net.devices[swId];
+  for (const [name, p] of node.ports) {
+    if (p.state !== 'BLK') continue;
+    blocked.add(name);
+    if (isPortChannel(name)) for (const m of channelMembers(dev, name)) blocked.add(m.name);
+  }
+  return blocked;
+}
+
+export function stpVlan(net: NetworkState, swId: string, vlan: number): StpVlanInfo | null {
+  const dev = net.devices[swId];
+  if (!dev || dev.deviceType !== 'switch' || !dev.vlans[vlan]) return null;
+  const all = stpCompute(net, vlan);
+  const node = all.get(swId);
+  if (!node) return null;
+  const switches = Object.values(net.devices).filter((d) => d.deviceType === 'switch' && d.vlans[vlan]);
+  const root = switches.reduce((best, s) => (compareBridge({ pri: bridgePriority(s, vlan), mac: s.mac }, { pri: bridgePriority(best, vlan), mac: best.mac }) < 0 ? s : best));
+  return {
+    vlan,
+    protocol: dev.stpMode === 'rapid-pvst' ? 'rstp' : 'ieee',
+    rootPriority: bridgePriority(root, vlan),
+    rootMac: root.mac,
+    bridgePriority: bridgePriority(dev, vlan),
+    bridgeMac: dev.mac,
+    isRoot: root.id === swId,
+    rootCost: node.cost,
+    rootPort: node.rootPort,
+    ports: [...node.ports.values()].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true })),
+  };
+}
+
+/** The switch elected root for a VLAN, or null when no switch carries it. */
+export function stpRoot(net: NetworkState, vlan: number): string | null {
+  const switches = Object.values(net.devices).filter((d) => d.deviceType === 'switch' && d.vlans[vlan]);
+  if (!switches.length) return null;
+  return switches.reduce((best, s) => (compareBridge({ pri: bridgePriority(s, vlan), mac: s.mac }, { pri: bridgePriority(best, vlan), mac: best.mac }) < 0 ? s : best)).id;
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +511,12 @@ function l2Walk(net: NetworkState, start: Frame): Arrival[] {
   const queue: Frame[] = [start];
   const visited = new Set<string>();
   const seen = new Set<string>();
+  const blockedCache = new Map<string, Set<string>>();
+  const blocked = (sw: string, vlan: number) => {
+    const key = `${sw}:${vlan}`;
+    if (!blockedCache.has(key)) blockedCache.set(key, stpBlockedPorts(net, sw, vlan));
+    return blockedCache.get(key)!;
+  };
   while (queue.length) {
     const f = queue.shift()!;
     if ('sw' in f) {
@@ -314,8 +526,9 @@ function l2Walk(net: NetworkState, start: Frame): Arrival[] {
       const sw = net.devices[f.sw];
       const svi = sw.interfaces[`Vlan${f.vlan}`];
       if (svi && ifaceUp(net, f.sw, svi.name)) arrivals.push({ kind: 'svi', node: f.sw, iface: svi.name });
+      const blk = blocked(f.sw, f.vlan);
       for (const q of Object.values(sw.interfaces)) {
-        if (isSvi(q.name) || !ifaceUp(net, f.sw, q.name)) continue;
+        if (isSvi(q.name) || isPortChannel(q.name) || !ifaceUp(net, f.sw, q.name) || blk.has(q.name)) continue;
         if (q.mode === 'trunk') {
           if (allowsVlan(q, f.vlan)) queue.push({ node: f.sw, iface: q.name, tag: f.vlan === q.nativeVlan ? null : f.vlan });
         } else if (q.accessVlan === f.vlan) queue.push({ node: f.sw, iface: q.name, tag: null });
@@ -348,7 +561,7 @@ function l2Walk(net: NetworkState, start: Frame): Arrival[] {
     let vlan: number | null = null;
     if (ifc.mode === 'trunk') vlan = f.tag === null ? ifc.nativeVlan : allowsVlan(ifc, f.tag) ? f.tag : null;
     else if (f.tag === null || f.tag === ifc.accessVlan) vlan = ifc.accessVlan;
-    if (vlan !== null) queue.push({ sw: p.node, vlan });
+    if (vlan !== null && !blocked(p.node, vlan).has(ifc.name)) queue.push({ sw: p.node, vlan });
   }
   return arrivals;
 }
@@ -483,7 +696,14 @@ export function ospfNeighbors(net: NetworkState, id: string): OspfNeighbor[] {
   return out.sort((a, b) => (ipToInt(a.routerId) ?? 0) - (ipToInt(b.routerId) ?? 0));
 }
 
-/** Routes learned through OSPF: SPF over the router graph, then every OSPF-enabled network of each reachable router. */
+/**
+ * Routes learned through OSPF with multi-area semantics:
+ * - intra-area (O): SPF inside each area the router belongs to;
+ * - inter-area (O IA): networks of other areas learned through area border routers that
+ *   are attached to the backbone (an area with no path to area 0 stays isolated);
+ * - external default (O*E2) from routers running default-information originate.
+ * Intra-area routes are preferred over inter-area ones regardless of metric.
+ */
 export function ospfRoutes(net: NetworkState, id: string): RouteEntry[] {
   const dev = net.devices[id];
   if (!dev?.ospf || !dev.ipRouting) return [];
@@ -500,48 +720,92 @@ export function ospfRoutes(net: NetworkState, id: string): RouteEntry[] {
     if (!infoCache.has(n)) infoCache.set(n, ospfInterfaces(net, n));
     return infoCache.get(n)!;
   };
+  const areasOf = (n: string) => new Set(infos(n).map((i) => i.area));
+  const isAbr = (n: string) => areasOf(n).size >= 2 && areasOf(n).has(0);
 
-  // Dijkstra from the local router.
-  const dist = new Map<string, number>([[id, 0]]);
-  const firstHop = new Map<string, { nextHop: string; exitInterface: string }>();
-  const done = new Set<string>();
-  while (true) {
-    let cur: string | null = null;
-    for (const [n, d] of dist) if (!done.has(n) && (cur === null || d < dist.get(cur)!)) cur = n;
-    if (cur === null) break;
-    done.add(cur);
-    for (const nb of nbrs(cur)) {
-      const cost = infos(cur).find((i) => i.name === nb.localIface)?.cost ?? 1;
-      const nd = dist.get(cur)! + cost;
-      if (nd < (dist.get(nb.node) ?? Infinity)) {
-        dist.set(nb.node, nd);
-        firstHop.set(nb.node, cur === id ? { nextHop: nb.ip, exitInterface: nb.localIface } : firstHop.get(cur)!);
+  interface Reach {
+    dist: number;
+    hop?: { nextHop: string; exitInterface: string };
+  }
+  const spfCache = new Map<string, Map<string, Reach>>();
+  /** Dijkstra restricted to adjacencies inside one area (or all areas when `area` is null). */
+  const spf = (area: number | null, source: string): Map<string, Reach> => {
+    const key = `${area}:${source}`;
+    if (spfCache.has(key)) return spfCache.get(key)!;
+    const dist = new Map<string, Reach>([[source, { dist: 0 }]]);
+    const done = new Set<string>();
+    while (true) {
+      let cur: string | null = null;
+      for (const [n, d] of dist) if (!done.has(n) && (cur === null || d.dist < dist.get(cur)!.dist)) cur = n;
+      if (cur === null) break;
+      done.add(cur);
+      for (const nb of nbrs(cur)) {
+        if (area !== null && nb.area !== area) continue;
+        const cost = infos(cur).find((i) => i.name === nb.localIface)?.cost ?? 1;
+        const nd = dist.get(cur)!.dist + cost;
+        if (nd < (dist.get(nb.node)?.dist ?? Infinity)) {
+          dist.set(nb.node, { dist: nd, hop: cur === source ? { nextHop: nb.ip, exitInterface: nb.localIface } : dist.get(cur)!.hop });
+        }
+      }
+    }
+    spfCache.set(key, dist);
+    return dist;
+  };
+
+  const best = new Map<string, RouteEntry>();
+  const localNets = new Set(localInfos.map((i) => `${i.network}/${prefixLength(i.mask)}`));
+  const consider = (info: OspfInterfaceInfo, metric: number, source: 'ospf' | 'ospf-ia', hop: Reach['hop']) => {
+    if (!hop) return;
+    const lo = isLoopback(info.name);
+    const destination = lo ? info.ip : info.network;
+    const mask = lo ? '255.255.255.255' : info.mask;
+    const key = `${destination}/${prefixLength(mask)}`;
+    if (localNets.has(key)) return;
+    const existing = best.get(key);
+    const rank = (s: string) => (s === 'ospf' ? 0 : 1);
+    if (existing && (rank(existing.source) < rank(source) || (rank(existing.source) === rank(source) && existing.metric <= metric))) return;
+    best.set(key, { destination, mask, prefix: prefixLength(mask), source, nextHop: hop.nextHop, exitInterface: hop.exitInterface, adminDistance: 110, metric, candidateDefault: false });
+  };
+  const netsIn = (router: string, area: number) => infos(router).filter((i) => i.area === area);
+
+  for (const area of areasOf(id)) {
+    const reach = spf(area, id);
+    // Intra-area.
+    for (const [r, d] of reach) {
+      if (r === id) continue;
+      for (const n of netsIn(r, area)) consider(n, d.dist + n.cost, 'ospf', d.hop);
+    }
+    // Inter-area through backbone-attached ABRs reachable inside this area.
+    for (const [b, db] of reach) {
+      if (b === id || !isAbr(b)) continue;
+      if (area === 0) {
+        for (const x of areasOf(b)) {
+          if (x === 0) continue;
+          for (const [r, dr] of spf(x, b)) for (const n of netsIn(r, x)) consider(n, db.dist + dr.dist + n.cost, 'ospf-ia', db.hop);
+        }
+      } else {
+        const backbone = spf(0, b);
+        for (const [r, dr] of backbone) for (const n of netsIn(r, 0)) consider(n, db.dist + dr.dist + n.cost, 'ospf-ia', db.hop);
+        for (const [c, dc] of backbone) {
+          if (c === b || !isAbr(c)) continue;
+          for (const y of areasOf(c)) {
+            if (y === 0 || y === area) continue;
+            for (const [r, dr] of spf(y, c)) for (const n of netsIn(r, y)) consider(n, db.dist + dc.dist + dr.dist + n.cost, 'ospf-ia', db.hop);
+          }
+        }
       }
     }
   }
 
-  const best = new Map<string, RouteEntry>();
-  const localNets = new Set(localInfos.map((i) => `${i.network}/${prefixLength(i.mask)}`));
-  for (const [r, d] of dist) {
-    if (r === id) continue;
-    const hop = firstHop.get(r)!;
-    for (const i of infos(r)) {
-      const lo = isLoopback(i.name);
-      const destination = lo ? i.ip : i.network;
-      const mask = lo ? '255.255.255.255' : i.mask;
-      const key = `${destination}/${prefixLength(mask)}`;
-      if (localNets.has(key)) continue;
-      const metric = d + i.cost;
-      const existing = best.get(key);
-      if (!existing || metric < existing.metric) {
-        best.set(key, { destination, mask, prefix: prefixLength(mask), source: 'ospf', nextHop: hop.nextHop, exitInterface: hop.exitInterface, adminDistance: 110, metric, candidateDefault: false });
-      }
-    }
+  // External default: any originating router reachable through the OSPF graph.
+  const any = spf(null, id);
+  for (const [r, d] of any) {
+    if (r === id || !d.hop) continue;
     const rdev = net.devices[r];
     if (rdev.ospf?.defaultInformationOriginate && baseRoutingTable(net, r).some((e) => e.candidateDefault)) {
       const key = '0.0.0.0/0';
       const existing = best.get(key);
-      if (!existing || d < existing.metric) best.set(key, { destination: '0.0.0.0', mask: '0.0.0.0', prefix: 0, source: 'ospf-external', nextHop: hop.nextHop, exitInterface: hop.exitInterface, adminDistance: 110, metric: 1, candidateDefault: true });
+      if (!existing || d.dist < existing.metric) best.set(key, { destination: '0.0.0.0', mask: '0.0.0.0', prefix: 0, source: 'ospf-external', nextHop: d.hop.nextHop, exitInterface: d.hop.exitInterface, adminDistance: 110, metric: 1, candidateDefault: true });
     }
   }
   return [...best.values()];
@@ -554,7 +818,7 @@ export interface RouteEntry {
   destination: string;
   mask: string;
   prefix: number;
-  source: 'connected' | 'local' | 'static' | 'ospf' | 'ospf-external';
+  source: 'connected' | 'local' | 'static' | 'ospf' | 'ospf-ia' | 'ospf-external';
   nextHop?: string;
   exitInterface: string;
   adminDistance: number;

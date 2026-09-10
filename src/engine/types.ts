@@ -154,6 +154,12 @@ export interface InterfaceState {
   /** Member of an EtherChannel: "channel-group <id> mode <mode>". */
   channelGroup?: { id: number; mode: ChannelMode };
   portSecurity?: PortSecurity;
+  /** "spanning-tree portfast" (edge port). */
+  portfast?: boolean;
+  /** "spanning-tree bpduguard enable": err-disable if a switch shows up on the port. */
+  bpduGuard?: boolean;
+  /** "spanning-tree cost <n>" override (default 4 for Gigabit, 3 for a two-link bundle). */
+  stpCost?: number;
   /** Put into err-disabled by a port-security violation; cleared by shutdown / no shutdown. */
   errDisabled?: boolean;
 }
@@ -255,6 +261,11 @@ export interface DeviceState {
   natTranslations: NatTranslation[];
   ipv6UnicastRouting: boolean;
   staticRoutes6: StaticRoute6[];
+  /** Base MAC address (bridge identifier on switches). */
+  mac: string;
+  stpMode: 'pvst' | 'rapid-pvst';
+  /** "spanning-tree vlan <n> priority <p>" per VLAN; default 32768. */
+  stpPriority: Record<number, number>;
 
   enablePassword?: string;
   enableSecret?: string;
