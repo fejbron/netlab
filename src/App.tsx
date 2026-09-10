@@ -1,6 +1,9 @@
 import { Link, Route, Routes } from 'react-router-dom';
+import AccountPage from './pages/AccountPage';
 import DashboardPage from './pages/DashboardPage';
 import LabPage from './pages/LabPage';
+import { AuthProvider } from './lib/auth';
+import { ProgressProvider } from './lib/progressStore';
 
 function NotFound() {
   return (
@@ -15,10 +18,15 @@ function NotFound() {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/" element={<DashboardPage />} />
-      <Route path="/lab/:labId" element={<LabPage />} />
-      <Route path="*" element={<NotFound />} />
-    </Routes>
+    <AuthProvider>
+      <ProgressProvider>
+        <Routes>
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/lab/:labId" element={<LabPage />} />
+          <Route path="/account" element={<AccountPage />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </ProgressProvider>
+    </AuthProvider>
   );
 }

@@ -23,7 +23,7 @@ Open-source network CLI labs that run entirely in your browser. Practise Cisco I
 - **IPv6**: `ipv6 unicast-routing`, global addresses with prefix lengths, EUI-64, automatic and manual link-local addresses, `ipv6 enable`, static and default routes (including link-local next hops with an exit interface), `show ipv6 interface brief`, `show ipv6 route`, and IPv6 `ping`/`traceroute` from routers and PCs over the same forwarding engine. Hosts can be dual-stack.
 - **PC terminal**: `ipconfig` (with `/all`, `/renew`, `/release`), `ping` and `tracert` (IPv4 and IPv6) with Windows-style output, so learners test from the host like they would on the job.
 - **Labs with live grading**: objectives are declarative checks on device state, command history and ping results, scoped to any device in the topology. The sidebar ticks off objectives as you type.
-- **Progress and sessions on device**: everything is stored in `localStorage`. Nothing leaves your browser.
+- **Progress on device, or in an account**: guest mode keeps everything in `localStorage` and nothing leaves the browser. When the site operator enables accounts (see below), learners can sign up with email and password or GitHub, and their best score and stars per lab are stored server-side and follow them across devices. Guest progress is merged into the account on first sign-in.
 
 ## Quick start
 
@@ -41,6 +41,27 @@ npm test          # engine and lab tests (vitest)
 npm run build     # type-check and build to dist/
 ```
 
+## Accounts (optional)
+
+NetLab works without any backend. To let learners create accounts and keep progress across devices, point it at a free [Supabase](https://supabase.com) project:
+
+1. Create a Supabase project and open its SQL editor. Paste and run `supabase/schema.sql`. It creates the `lab_progress` table with row-level security, so each learner can only read and write their own rows.
+2. In Authentication > Providers, keep Email enabled. Optionally enable GitHub and add your site URL under Authentication > URL Configuration (add `http://localhost:5173` for local development, and `/account` as an allowed redirect path).
+3. Copy the project URL and the anon (public) key from Project Settings > API into a `.env.local` file (see `.env.example`):
+
+   ```
+   VITE_SUPABASE_URL=https://xxxx.supabase.co
+   VITE_SUPABASE_ANON_KEY=eyJ...
+   ```
+
+4. Restart `npm run dev`. A "Sign in" button appears in the header and `/account` offers sign-in and account creation.
+
+The anon key is safe to ship in the browser bundle: every request runs under the signed-in user's JWT and the row-level security policies decide what it may touch. Terminal sessions (the text of each lab's console) stay on the device; only scores, stars and completion times are stored in the account.
+
+## Deploying to Vercel
+
+The app is a static site, so the free tier is enough. Import the repository in Vercel; it detects Vite and uses `npm run build` with `dist/` as the output directory. `vercel.json` rewrites every path to `index.html` so deep links like `/lab/os-01-turn-on-ospf` work on refresh. To enable accounts, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as environment variables in the project settings and redeploy. Any other static host (Netlify, Cloudflare Pages, GitHub Pages) works the same way as long as it serves `index.html` for unknown paths.
+
 ## Project layout
 
 ```
@@ -56,7 +77,8 @@ src/
   content/
     labs/*.ts          Lab definitions (scenario, hints, initial device, objectives)
   components/, pages/  React UI (dashboard, lab page, terminal, topology)
-  lib/                 localStorage progress and per-lab session persistence
+  lib/                 progress (localStorage + optional Supabase sync), auth, per-lab session persistence
+supabase/schema.sql    optional database schema for accounts
 ```
 
 ## Writing a lab

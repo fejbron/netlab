@@ -7,7 +7,9 @@ import Terminal from '../components/Terminal';
 import Topology from '../components/Topology';
 import { getLab, isLabUnlocked, labNetwork, nextLab, previousLab, type Lab } from '../content';
 import { executeHost, executeOn, grade, hostPrompt, isMaskedInput, prompt, tabComplete, type GradeResult, type NetworkState } from '../engine';
-import { loadProgress, loadUnlockAll, saveLabProgress } from '../lib/progress';
+import AccountMenu from '../components/AccountMenu';
+import { loadUnlockAll } from '../lib/progress';
+import { useProgress } from '../lib/progressStore';
 import { clearSession, loadSession, saveSession, type LabSession, type TermLine } from '../lib/session';
 
 function welcome(title: string, network: NetworkState, nodeId: string): TermLine[] {
@@ -32,6 +34,7 @@ export default function LabPage() {
   const { labId = '' } = useParams();
   const navigate = useNavigate();
   const lab = getLab(labId);
+  const { progress, recordPass } = useProgress();
 
   const [session, setSession] = useState<LabSession | null>(() => (lab ? loadSession(lab.id) ?? freshSession(lab) : null));
   const [showChecks, setShowChecks] = useState(true);
@@ -65,7 +68,7 @@ export default function LabPage() {
     );
   }
 
-  if (!isLabUnlocked(lab.id, loadProgress(), loadUnlockAll())) {
+  if (!isLabUnlocked(lab.id, progress, loadUnlockAll())) {
     const prev = previousLab(lab.id);
     return (
       <div className="flex h-full flex-col">
@@ -132,7 +135,7 @@ export default function LabPage() {
     const s = !r.passed ? 0 : session!.hintsRevealed === 0 ? 3 : session!.hintsRevealed < lab!.hints.length ? 2 : 1;
     setStars(s);
     setResult(r);
-    if (r.passed) saveLabProgress(lab!.id, { score: r.score, stars: s, completedAt: new Date().toISOString() });
+    if (r.passed) recordPass(lab!.id, { score: r.score, stars: s, completedAt: new Date().toISOString() });
   }
 
   const passedCount = live?.objectives.filter((o) => o.passed).length ?? 0;
@@ -153,6 +156,7 @@ export default function LabPage() {
         <Link to="/" className="rounded-md border border-border px-3 py-1 text-xs hover:bg-surface-2">
           ← Labs
         </Link>
+        <AccountMenu />
       </Header>
 
       <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)_340px]">

@@ -1,17 +1,22 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import AccountMenu from '../components/AccountMenu';
 import Header from '../components/Header';
 import { isLabUnlocked, labs, labsForModule, modules } from '../content';
-import { loadProgress, loadUnlockAll, resetProgress, saveUnlockAll } from '../lib/progress';
+import { useAuth } from '../lib/auth';
+import { loadUnlockAll, saveUnlockAll } from '../lib/progress';
+import { useProgress } from '../lib/progressStore';
 
 export default function DashboardPage() {
-  const [progress, setProgress] = useState(loadProgress);
+  const { progress, reset } = useProgress();
+  const auth = useAuth();
   const [unlockAll, setUnlockAll] = useState(loadUnlockAll);
   const completed = labs.filter((l) => progress[l.id]).length;
 
   return (
     <div className="flex h-full flex-col">
       <Header>
+        <AccountMenu />
         <span className="text-muted">
           {completed}/{labs.length} labs complete
         </span>
@@ -31,10 +36,7 @@ export default function DashboardPage() {
             type="button"
             className="rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg"
             onClick={() => {
-              if (confirm('Reset all progress and saved lab sessions?')) {
-                resetProgress();
-                setProgress({});
-              }
+              if (confirm(auth.user ? 'Reset all progress and saved lab sessions, on this device and in your account?' : 'Reset all progress and saved lab sessions?')) void reset();
             }}
           >
             Reset progress
@@ -44,7 +46,20 @@ export default function DashboardPage() {
       <main className="mx-auto w-full max-w-5xl flex-1 overflow-y-auto px-4 py-8">
         <h1 className="display text-4xl text-fg-bright md:text-5xl">Learn networking by doing.</h1>
         <p className="mt-2 max-w-2xl text-muted">
-          Hands-on Cisco IOS labs that run entirely in your browser. No installs, no accounts, no payments. Progress is stored on this device. Labs unlock in order: pass one to open the next.
+          Hands-on Cisco IOS labs that run entirely in your browser. No installs, no payments. Labs unlock in order: pass one to open the next.{' '}
+          {!auth.enabled ? (
+            'Progress is stored on this device.'
+          ) : auth.user ? (
+            'Progress is saved to your account.'
+          ) : (
+            <>
+              Progress is stored on this device;{' '}
+              <Link to="/account" className="text-accent hover:underline">
+                create a free account
+              </Link>{' '}
+              to keep it across devices.
+            </>
+          )}
         </p>
 
         {modules.map((m) => {
