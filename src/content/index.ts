@@ -5,6 +5,8 @@ import { learnSwitchingLabs } from './labs/learn-switching';
 import { secureTheSwitchLabs } from './labs/secure-the-switch';
 import { learnRoutingLabs } from './labs/learn-routing';
 import { learnOspfLabs } from './labs/learn-ospf';
+import { learnAclLabs } from './labs/learn-acls';
+import { learnDhcpLabs } from './labs/learn-dhcp';
 import { ccnaExamLabs } from './labs/ccna-exams';
 
 export type { Lab, Module, Difficulty } from './types';
@@ -15,10 +17,12 @@ export const modules: Module[] = [
   { id: 'secure-the-switch', order: 3, title: 'Secure the Switch', description: 'Encrypt passwords, enable SSH, and lock down unused ports.' },
   { id: 'learn-routing', order: 4, title: 'Learn Routing', description: 'Address router interfaces, build routing tables with static routes, and connect networks.' },
   { id: 'learn-ospf', order: 5, title: 'Learn OSPF', description: 'Let routers discover each other and exchange routes with single-area OSPF.' },
-  { id: 'ccna-exams', order: 6, title: 'CCNA Exams', description: 'Multi-device capstone exams that combine switching, routing, OSPF, troubleshooting and hardening.' },
+  { id: 'learn-acls', order: 6, title: 'Learn ACLs', description: 'Filter traffic with standard and extended access lists and protect management access.' },
+  { id: 'learn-dhcp', order: 7, title: 'Learn DHCP', description: 'Hand out addresses from a router, relay across the network, and troubleshoot leases.' },
+  { id: 'ccna-exams', order: 8, title: 'CCNA Exams', description: 'Multi-device capstone exams that combine switching, routing, OSPF, ACLs, DHCP, troubleshooting and hardening.' },
 ];
 
-export const labs: Lab[] = [...meetTheCliLabs, ...learnSwitchingLabs, ...secureTheSwitchLabs, ...learnRoutingLabs, ...learnOspfLabs, ...ccnaExamLabs].sort((a, b) => {
+export const labs: Lab[] = [...meetTheCliLabs, ...learnSwitchingLabs, ...secureTheSwitchLabs, ...learnRoutingLabs, ...learnOspfLabs, ...learnAclLabs, ...learnDhcpLabs, ...ccnaExamLabs].sort((a, b) => {
   const ma = modules.find((m) => m.id === a.moduleId)?.order ?? 0;
   const mb = modules.find((m) => m.id === b.moduleId)?.order ?? 0;
   return ma - mb || a.order - b.order;

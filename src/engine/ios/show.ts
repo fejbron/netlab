@@ -1,6 +1,7 @@
-import type { DeviceState, InterfaceState } from '../types';
+import type { Acl, DeviceState, InterfaceState } from '../types';
 import { compareInterfaceNames, isSvi, shortInterfaceName } from '../interfaces';
 import { isLoopback, isSubinterface, type MacEntry, type OspfInterfaceInfo, type OspfNeighbor, type RouteEntry } from '../network';
+import { ruleText } from '../acl';
 import { classfulNetwork, ipToInt, prefixLength } from './net';
 
 export const IOS_VERSION = '15.2(7)E8';
@@ -66,10 +67,23 @@ export function renderConfigBody(state: DeviceState): string[] {
 }
 
 function pushLineConfig(state: DeviceState, o: string[], l: DeviceState['lines']['con']) {
+  if (l.accessClass) o.push(` access-class ${l.accessClass} in`);
   if (l.password) o.push(` password ${pw(state, l.password)}`);
   if (l.login === true) o.push(' login');
   if (l.login === 'local') o.push(' login local');
   if (l.transportInput && l.transportInput !== 'all') o.push(` transport input ${l.transportInput}`);
+}
+
+function pushAclConfig(state: DeviceState, out: string[]) {
+  for (const acl of Object.values(state.acls)) {
+    if (/^\d+$/.test(acl.name)) {
+      for (const e of acl.entries) out.push(`access-list ${acl.name} ${ruleText(e, acl.kind)}`);
+    } else {
+      out.push(`ip access-list ${acl.kind} ${acl.name}`);
+      for (const e of acl.entries) out.push(` ${e.seq} ${ruleText(e, acl.kind)}`);
+    }
+    out.push('!');
+  }
 }
 
 function pushSecurityConfig(state: DeviceState, out: string[]) {
@@ -105,11 +119,24 @@ function renderRouterConfigBody(state: DeviceState): string[] {
   if (state.sshVersion) out.push(`ip ssh version ${state.sshVersion}`, '!');
   out.push('ip cef', 'no ipv6 cef', '!');
   if (!state.ipRouting) out.push('no ip routing', '!');
+  for (const r of state.dhcpExcluded) out.push(`ip dhcp excluded-address ${r.from}${r.to !== r.from ? ` ${r.to}` : ''}`);
+  if (state.dhcpExcluded.length) out.push('!');
+  for (const p of Object.values(state.dhcpPools)) {
+    out.push(`ip dhcp pool ${p.name}`);
+    if (p.network && p.mask) out.push(` network ${p.network} ${p.mask}`);
+    if (p.defaultRouter) out.push(` default-router ${p.defaultRouter}`);
+    if (p.dnsServer) out.push(` dns-server ${p.dnsServer}`);
+    if (p.domainName) out.push(` domain-name ${p.domainName}`);
+    out.push('!');
+  }
   for (const i of sortedInterfaces(state)) {
     out.push(`interface ${i.name}`);
     if (i.description) out.push(` description ${i.description}`);
     if (i.encapsulation) out.push(` encapsulation dot1Q ${i.encapsulation.vlan}${i.encapsulation.native ? ' native' : ''}`);
     out.push(i.ipAddress && i.subnetMask ? ` ip address ${i.ipAddress} ${i.subnetMask}` : ' no ip address');
+    if (i.helperAddress) out.push(` ip helper-address ${i.helperAddress}`);
+    if (i.aclIn) out.push(` ip access-group ${i.aclIn} in`);
+    if (i.aclOut) out.push(` ip access-group ${i.aclOut} out`);
     if (i.ospfArea !== undefined && state.ospf) out.push(` ip ospf ${state.ospf.processId} area ${i.ospfArea}`);
     if (i.ospfCost !== undefined) out.push(` ip ospf cost ${i.ospfCost}`);
     if (i.ospfPriority !== undefined) out.push(` ip ospf priority ${i.ospfPriority}`);
@@ -135,8 +162,70 @@ function renderRouterConfigBody(state: DeviceState): string[] {
     out.push(`ip route ${r.destination} ${r.mask} ${via}${r.adminDistance !== 1 ? ` ${r.adminDistance}` : ''}`);
   }
   if (state.staticRoutes.length) out.push('!');
+  pushAclConfig(state, out);
   pushTail(state, out);
   return out;
+}
+
+export function showAccessLists(acls: Acl[]): string[] {
+  const out: string[] = [];
+  for (const acl of acls) {
+    out.push(`${acl.kind === 'standard' ? 'Standard' : 'Extended'} IP access list ${acl.name}`);
+    for (const e of acl.entries) {
+      if (e.action === 'remark') continue;
+      out.push(`    ${e.seq} ${ruleText(e, acl.kind, true)}${e.matches ? ` (${e.matches} match${e.matches === 1 ? '' : 'es'})` : ''}`);
+    }
+  }
+  return out;
+}
+
+export function showIpDhcpBinding(state: DeviceState): string[] {
+  const out = ['Bindings from all pools not associated with VRF:', 'IP address      Client-ID/              Lease expiration        Type', '                Hardware address/', '                User name'];
+  for (const b of state.dhcpBindings) {
+    // IOS shows the client identifier as 01 (Ethernet) followed by the MAC, regrouped in fours.
+    const clientId = `01${b.mac.replace(/\./g, '')}`.match(/.{1,4}/g)!.join('.');
+    out.push(`${b.ip.padEnd(16)}${clientId.padEnd(24)}Sep 11 2026 03:04 PM    Automatic`);
+  }
+  return out;
+}
+
+export function showIpDhcpPool(state: DeviceState): string[] {
+  const out: string[] = [];
+  for (const p of Object.values(state.dhcpPools)) {
+    const total = p.mask ? Math.max(0, 2 ** (32 - prefixLength(p.mask)) - 2) : 0;
+    const leased = state.dhcpBindings.filter((b) => b.pool === p.name).length;
+    const excludedCount = p.network && p.mask ? state.dhcpExcluded.reduce((n, r) => n + Math.max(0, (ipToInt(r.to) ?? 0) - (ipToInt(r.from) ?? 0) + 1), 0) : 0;
+    out.push(`Pool ${p.name} :`, ' Utilization mark (high/low)    : 100 / 0', ' Subnet size (first/next)       : 0 / 0', ` Total addresses                : ${total}`, ` Leased addresses               : ${leased}`, ` Excluded addresses             : ${excludedCount}`, ' Pending event                  : none');
+    if (p.network && p.mask) {
+      const first = ((ipToInt(p.network) ?? 0) + 1) >>> 0;
+      const last = (((ipToInt(p.network) ?? 0) | (~(ipToInt(p.mask) ?? 0) >>> 0)) >>> 0) - 1;
+      out.push(' 1 subnet is currently in the pool :', ' Current index        IP address range                    Leased/Excluded/Total', ` ${ipText(first).padEnd(21)}${ipText(first).padEnd(17)}- ${ipText(last).padEnd(17)}${String(leased).padEnd(6)}/ ${String(excludedCount).padEnd(6)}/ ${total}`);
+    } else out.push(' 0 subnets are currently in the pool');
+  }
+  return out.length ? out : ['%DHCP: No pools configured'];
+}
+
+function ipText(n: number): string {
+  return [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+}
+
+export function showIpInterface(i: InterfaceState): string[] {
+  const line = i.shutdown ? 'administratively down, line protocol is down' : i.connected ? 'up, line protocol is up' : 'down, line protocol is down';
+  return [
+    `${i.name} is ${line}`,
+    i.ipAddress && i.subnetMask ? `  Internet address is ${i.ipAddress}/${prefixLength(i.subnetMask)}` : '  Internet protocol processing disabled',
+    '  Broadcast address is 255.255.255.255',
+    '  Address determined by setup command',
+    '  MTU is 1500 bytes',
+    i.helperAddress ? `  Helper address is ${i.helperAddress}` : '  Helper address is not set',
+    '  Directed broadcast forwarding is disabled',
+    i.aclOut ? `  Outgoing access list is ${i.aclOut}` : '  Outgoing access list is not set',
+    i.aclIn ? `  Inbound  access list is ${i.aclIn}` : '  Inbound  access list is not set',
+    '  Proxy ARP is enabled',
+    '  Local Proxy ARP is disabled',
+    '  ICMP redirects are always sent',
+    '  ICMP unreachables are always sent',
+  ];
 }
 
 function renderSwitchConfigBody(state: DeviceState): string[] {

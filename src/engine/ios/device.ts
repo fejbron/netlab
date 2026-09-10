@@ -1,7 +1,8 @@
+import { isExtendedNumber, nextSeq, parseExtendedRule, parseStandardRule } from '../acl';
 import { normalizeInterfaceName } from '../interfaces';
 import { fromSwitch, isSubinterface, syncLinkState, type NetworkState } from '../network';
 import { complete, help, resolve } from '../resolver';
-import type { DeviceState, ExecResult, InterfaceState, Neighbor, StaticRoute, VlanState } from '../types';
+import type { Acl, DeviceState, ExecResult, InterfaceState, Neighbor, StaticRoute, VlanState } from '../types';
 import { defsForMode, INVALID_INPUT, isConfigMode, privExecFor, WORD_HELP } from './commands';
 
 export function prompt(state: DeviceState): string {
@@ -23,6 +24,12 @@ export function prompt(state: DeviceState): string {
       return `${h}(config-line)#`;
     case 'router':
       return `${h}(config-router)#`;
+    case 'acl-std':
+      return `${h}(config-std-nacl)#`;
+    case 'acl-ext':
+      return `${h}(config-ext-nacl)#`;
+    case 'dhcp':
+      return `${h}(dhcp-config)#`;
   }
 }
 
@@ -218,6 +225,10 @@ function baseDevice(id: string, hostname: string, deviceType: DeviceState['devic
     neighbors: [],
     ipRouting: deviceType === 'router',
     staticRoutes: [],
+    acls: {},
+    dhcpPools: {},
+    dhcpExcluded: [],
+    dhcpBindings: [],
     users: [],
     lines: { con: { login: false }, vty: { login: false } },
     servicePasswordEncryption: false,
@@ -276,6 +287,10 @@ export interface RouterOptions {
   staticRoutes?: Array<{ destination: string; mask: string; nextHop?: string; exitInterface?: string; adminDistance?: number }>;
   /** Pre-configured OSPF process. Networks are [address, wildcard, area] triples. */
   ospf?: { processId?: number; routerId?: string; networks?: Array<[string, string, number]>; passiveInterfaces?: string[]; defaultInformationOriginate?: boolean };
+  /** Pre-configured access lists as IOS rule lines, e.g. { '10': ['permit 192.168.1.0 0.0.0.255'] } or { 'BLOCK': ['deny icmp any any echo', 'permit ip any any'] }. */
+  acls?: Record<string, { kind?: 'standard' | 'extended'; rules: string[] }>;
+  /** Pre-configured DHCP pools and excluded ranges. */
+  dhcp?: { pools?: Array<{ name: string; network: string; mask: string; defaultRouter?: string; dnsServer?: string; domainName?: string }>; excluded?: Array<[string, string?]> };
   overrides?: Partial<DeviceState>;
 }
 
@@ -311,5 +326,24 @@ export function createRouter(options: RouterOptions = {}): DeviceState {
       defaultInformationOriginate: options.ospf.defaultInformationOriginate ?? false,
     };
   }
+  for (const [name, spec] of Object.entries(options.acls ?? {})) {
+    const numbered = /^\d+$/.test(name);
+    const kind = spec.kind ?? (numbered ? (isExtendedNumber(Number(name)) ? 'extended' : 'standard') : 'extended');
+    const acl: Acl = { name, kind, entries: [] };
+    for (const rule of spec.rules) {
+      const [action, ...rest] = rule.trim().split(/\s+/);
+      if (action === 'remark') {
+        acl.entries.push({ seq: nextSeq(acl), action: 'remark', remark: rest.join(' '), src: { kind: 'any' }, matches: 0 });
+        continue;
+      }
+      if (action !== 'permit' && action !== 'deny') throw new Error(`Bad ACL rule "${rule}"`);
+      const parsed = kind === 'standard' ? parseStandardRule(action, rest) : parseExtendedRule(action, rest);
+      if (!parsed) throw new Error(`Bad ACL rule "${rule}"`);
+      acl.entries.push({ ...parsed, seq: nextSeq(acl), matches: 0 });
+    }
+    dev.acls[name] = acl;
+  }
+  for (const p of options.dhcp?.pools ?? []) dev.dhcpPools[p.name] = { name: p.name, network: p.network, mask: p.mask, defaultRouter: p.defaultRouter, dnsServer: p.dnsServer, domainName: p.domainName };
+  for (const [from, to] of options.dhcp?.excluded ?? []) dev.dhcpExcluded.push({ from, to: to ?? from });
   return { ...dev, ...options.overrides };
 }

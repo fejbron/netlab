@@ -13,7 +13,8 @@
  */
 import type { DeviceState, InterfaceState, PingRecord } from './types';
 import { isSvi, normalizeInterfaceName, sviVlanId } from './interfaces';
-import { ipToInt, isValidIp, networkAddress, prefixLength, sameSubnet } from './ios/net';
+import { intToIp, ipToInt, isValidIp, networkAddress, prefixLength, sameSubnet } from './ios/net';
+import { evaluateAcl, type Packet } from './acl';
 
 export interface HostState {
   kind: 'host';
@@ -24,6 +25,10 @@ export interface HostState {
   ip?: string;
   mask?: string;
   gateway?: string;
+  dns?: string;
+  /** Obtains its address with DHCP ("ipconfig /renew") instead of static settings. */
+  dhcp?: boolean;
+  dhcpServer?: string;
   mac: string;
   commandHistory: string[];
   pings: PingRecord[];
@@ -129,6 +134,8 @@ export interface HostSpec {
   ip?: string;
   mask?: string;
   gateway?: string;
+  dns?: string;
+  dhcp?: boolean;
   kind?: HostState['deviceKind'];
 }
 
@@ -155,7 +162,7 @@ export function buildNetwork(spec: NetworkSpec): NetworkState {
   for (const d of spec.devices) devices[d.id] = d;
   const hosts: Record<string, HostState> = {};
   (spec.hosts ?? []).forEach((h, idx) => {
-    hosts[h.id] = { kind: 'host', id: h.id, name: h.name ?? h.id, deviceKind: h.kind ?? 'pc', ip: h.ip, mask: h.mask, gateway: h.gateway, mac: `0011.22bb.${String(idx + 1).padStart(4, '0')}`, commandHistory: [], pings: [] };
+    hosts[h.id] = { kind: 'host', id: h.id, name: h.name ?? h.id, deviceKind: h.kind ?? 'pc', ip: h.ip, mask: h.mask, gateway: h.gateway, dns: h.dns, dhcp: h.dhcp, mac: `0011.22bb.${String(idx + 1).padStart(4, '0')}`, commandHistory: [], pings: [] };
   });
   const net: NetworkState = { primary: spec.primary ?? spec.devices[0].id, devices, hosts, links: [] };
   for (const [a, b] of spec.links) net.links.push({ a: parseEnd(net, a), b: parseEnd(net, b) });
@@ -498,6 +505,8 @@ interface Decision {
   /** IP we are looking for at layer 2 (the destination or the next hop). */
   target: string;
   srcIp: string;
+  /** Logical exit interface on a router (subinterface when applicable). */
+  exitInterface?: string;
 }
 
 function ownsIp(net: NetworkState, node: string, ip: string): boolean {
@@ -529,7 +538,7 @@ function decide(net: NetworkState, node: string, dst: string): Decision | { erro
   if (!entry) return { error: 'no route' };
   const exit = dev.interfaces[entry.exitInterface];
   if (isLoopback(exit.name)) return { error: 'no route' };
-  return { frame: egressFrame(dev, exit), target: entry.nextHop ?? dst, srcIp: exit.ipAddress! };
+  return { frame: egressFrame(dev, exit), target: entry.nextHop ?? dst, srcIp: exit.ipAddress!, exitInterface: exit.name };
 }
 
 /** Find the node/interface that answers ARP for `target` on the segment behind `start`. */
@@ -557,38 +566,82 @@ export interface Hop {
   ip?: string;
 }
 
+export interface AclHit {
+  node: string;
+  acl: string;
+  seq: number;
+}
+
+export interface AclDenial {
+  node: string;
+  /** Address of the router interface that sent the ICMP unreachable. */
+  ip?: string;
+  acl: string;
+}
+
 export interface ForwardResult {
   reached: boolean;
   hops: Hop[];
   srcIp?: string;
   reason?: string;
+  denied?: AclDenial;
+  hits: AclHit[];
 }
 
-/** Walk a packet from `from` toward `dst`, one layer-3 hop at a time. */
-export function forward(net: NetworkState, from: string, dst: string): ForwardResult {
-  if (!isValidIp(dst)) return { reached: false, hops: [], reason: 'bad address' };
+export type PacketSpec = Omit<Packet, 'src' | 'dst'> & { src?: string };
+
+/**
+ * Evaluate an access list applied to a router interface. Returns the denial, or null
+ * when permitted (or when no list is applied / the list does not exist).
+ */
+function checkAcl(net: NetworkState, node: string, ifaceName: string, direction: 'in' | 'out', packet: Packet, hits: AclHit[]): AclDenial | null {
+  const dev = net.devices[node];
+  const iface = dev.interfaces[ifaceName];
+  const name = direction === 'in' ? iface?.aclIn : iface?.aclOut;
+  if (!name) return null;
+  const acl = dev.acls[name];
+  if (!acl || acl.entries.length === 0) return null;
+  const r = evaluateAcl(acl, packet);
+  if (r.entry) hits.push({ node, acl: name, seq: r.entry.seq });
+  return r.permit ? null : { node, ip: iface.ipAddress, acl: name };
+}
+
+/** Walk a packet from `from` toward `dst`, one layer-3 hop at a time, applying ACLs at each router. */
+export function forward(net: NetworkState, from: string, dst: string, spec: PacketSpec = { protocol: 'icmp', icmpType: 'echo' }): ForwardResult {
+  const hits: AclHit[] = [];
+  if (!isValidIp(dst)) return { reached: false, hops: [], reason: 'bad address', hits };
   let cur = from;
   const hops: Hop[] = [];
-  let srcIp: string | undefined;
+  let srcIp: string | undefined = spec.src;
   for (let ttl = 0; ttl < 32; ttl++) {
-    if (ownsIp(net, cur, dst)) return { reached: true, hops, srcIp: srcIp ?? dst };
+    if (ownsIp(net, cur, dst)) return { reached: true, hops, srcIp: srcIp ?? dst, hits };
     const d = decide(net, cur, dst);
-    if ('error' in d) return { reached: false, hops, srcIp, reason: d.error };
+    if ('error' in d) return { reached: false, hops, srcIp, reason: d.error, hits };
     srcIp ??= d.srcIp;
+    const packet: Packet = { ...spec, src: srcIp, dst };
+    // Outbound ACLs apply to transit traffic, never to packets the router itself created.
+    if (cur !== from && d.exitInterface) {
+      const denial = checkAcl(net, cur, d.exitInterface, 'out', packet, hits);
+      if (denial) return { reached: false, hops, srcIp, reason: 'acl', denied: { ...denial, ip: hops[hops.length - 1]?.ip ?? denial.ip }, hits };
+    }
     const ep = findEndpoint(net, d.frame, d.target);
-    if (!ep) return { reached: false, hops, srcIp, reason: 'unreachable' };
+    if (!ep) return { reached: false, hops, srcIp, reason: 'unreachable', hits };
     if (net.hosts[ep.node]) {
       const h = net.hosts[ep.node];
-      if (h.ip === dst) return { reached: true, hops: [...hops, { node: ep.node, ip: h.ip }], srcIp };
-      return { reached: false, hops, srcIp, reason: 'host does not forward' };
+      if (h.ip === dst) return { reached: true, hops: [...hops, { node: ep.node, ip: h.ip }], srcIp, hits };
+      return { reached: false, hops, srcIp, reason: 'host does not forward', hits };
     }
     const dev = net.devices[ep.node];
-    if (ownsIp(net, ep.node, dst)) return { reached: true, hops: [...hops, { node: ep.node, ip: dst }], srcIp };
+    if (dev.deviceType === 'router') {
+      const denial = checkAcl(net, ep.node, ep.iface, 'in', packet, hits);
+      if (denial) return { reached: false, hops, srcIp, reason: 'acl', denied: denial, hits };
+    }
+    if (ownsIp(net, ep.node, dst)) return { reached: true, hops: [...hops, { node: ep.node, ip: dst }], srcIp, hits };
     hops.push({ node: ep.node, ip: dev.interfaces[ep.iface]?.ipAddress });
-    if (dev.deviceType !== 'router' || !dev.ipRouting) return { reached: false, hops, srcIp, reason: 'not a router' };
+    if (dev.deviceType !== 'router' || !dev.ipRouting) return { reached: false, hops, srcIp, reason: 'not a router', hits };
     cur = ep.node;
   }
-  return { reached: false, hops, srcIp, reason: 'ttl exceeded' };
+  return { reached: false, hops, srcIp, reason: 'ttl exceeded', hits };
 }
 
 export interface PingResult {
@@ -596,15 +649,128 @@ export interface PingResult {
   /** Layer-3 hops on the way out (routers plus the final destination). */
   hops: Hop[];
   reason?: string;
+  /** Set when an ACL rejected the echo request on the way out. */
+  denied?: AclDenial;
+  hits: AclHit[];
 }
 
 export function ping(net: NetworkState, from: string, dst: string): PingResult {
-  const out = forward(net, from, dst);
-  if (!out.reached) return { success: false, hops: out.hops, reason: out.reason };
+  const out = forward(net, from, dst, { protocol: 'icmp', icmpType: 'echo' });
+  if (!out.reached) return { success: false, hops: out.hops, reason: out.reason, denied: out.denied, hits: out.hits };
   const dstNode = out.hops[out.hops.length - 1]?.node ?? from;
-  if (dstNode === from) return { success: true, hops: out.hops };
-  const back = forward(net, dstNode, out.srcIp!);
-  return back.reached ? { success: true, hops: out.hops } : { success: false, hops: out.hops, reason: `no return path (${back.reason})` };
+  if (dstNode === from) return { success: true, hops: out.hops, hits: out.hits };
+  const back = forward(net, dstNode, out.srcIp!, { protocol: 'icmp', icmpType: 'echo-reply', src: dst });
+  const hits = [...out.hits, ...back.hits];
+  if (back.reached) return { success: true, hops: out.hops, hits };
+  return { success: false, hops: out.hops, reason: back.denied ? 'reply filtered by acl' : `no return path (${back.reason})`, hits };
+}
+
+/** Increment "(N matches)" counters for every ACL entry a packet walk touched. */
+export function applyAclHits(net: NetworkState, hits: AclHit[]): void {
+  for (const h of hits) {
+    const entry = net.devices[h.node]?.acls[h.acl]?.entries.find((e) => e.seq === h.seq);
+    if (entry) entry.matches += 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DHCP
+
+export interface DhcpResult {
+  ok: boolean;
+  ip?: string;
+  mask?: string;
+  gateway?: string;
+  dns?: string;
+  server?: string;
+  reason?: string;
+}
+
+function ownedIps(net: NetworkState, exceptHost: string): Set<string> {
+  const used = new Set<string>();
+  for (const d of Object.values(net.devices)) for (const i of Object.values(d.interfaces)) if (i.ipAddress) used.add(i.ipAddress);
+  for (const h of Object.values(net.hosts)) if (h.id !== exceptHost && h.ip) used.add(h.ip);
+  return used;
+}
+
+function excluded(dev: DeviceState, ip: string): boolean {
+  const n = ipToInt(ip) ?? 0;
+  return dev.dhcpExcluded.some((r) => n >= (ipToInt(r.from) ?? 0) && n <= (ipToInt(r.to) ?? 0));
+}
+
+function poolFor(server: DeviceState, subnetIp: string, subnetMask: string) {
+  return Object.values(server.dhcpPools).find((p) => p.network && p.mask && sameSubnet(subnetIp, p.network, p.mask) && p.mask === subnetMask);
+}
+
+/**
+ * Simulate a DHCP DISCOVER from a host: local servers on the segment answer first,
+ * then relays (ip helper-address) forward to a reachable server that has a pool for
+ * the relay interface's subnet. On success the host and the server's bindings are updated.
+ */
+export function dhcpRequest(net: NetworkState, hostId: string): DhcpResult {
+  const host = net.hosts[hostId];
+  if (!host) return { ok: false, reason: 'no such host' };
+  let offer: { server: DeviceState; pool: NonNullable<ReturnType<typeof poolFor>>; serverIp: string } | null = null;
+  for (const a of l2Walk(net, { node: hostId, iface: HOST_IFACE, tag: null })) {
+    if (a.kind !== 'router') continue;
+    const dev = net.devices[a.node];
+    for (const r of a.receivers) {
+      if (!r.ipAddress || !r.subnetMask) continue;
+      const local = poolFor(dev, r.ipAddress, r.subnetMask);
+      if (local) {
+        offer = { server: dev, pool: local, serverIp: r.ipAddress };
+        break;
+      }
+      if (r.helperAddress) {
+        const server = Object.values(net.devices).find((d) => d.deviceType === 'router' && Object.values(d.interfaces).some((i) => i.ipAddress === r.helperAddress && ifaceUp(net, d.id, i.name)));
+        if (!server) continue;
+        if (!forward(net, dev.id, r.helperAddress, { protocol: 'udp', dstPort: 67, srcPort: 67 }).reached) continue;
+        if (!forward(net, server.id, r.ipAddress, { protocol: 'udp', dstPort: 67, srcPort: 67 }).reached) continue;
+        const pool = poolFor(server, r.ipAddress, r.subnetMask);
+        if (pool) {
+          offer = { server, pool, serverIp: r.helperAddress };
+          break;
+        }
+      }
+    }
+    if (offer) break;
+  }
+  if (!offer) return { ok: false, reason: 'no DHCP server answered' };
+  const { server, pool, serverIp } = offer;
+  const existing = server.dhcpBindings.find((b) => b.mac === host.mac && b.pool === pool.name);
+  let ip = existing?.ip;
+  if (!ip) {
+    const used = ownedIps(net, hostId);
+    for (const b of server.dhcpBindings) used.add(b.ip);
+    const start = (ipToInt(pool.network!) ?? 0) + 1;
+    const end = ((ipToInt(pool.network!) ?? 0) | (~(ipToInt(pool.mask!) ?? 0) >>> 0)) >>> 0;
+    for (let n = start; n < end; n++) {
+      const cand = intToIp(n);
+      if (used.has(cand) || excluded(server, cand)) continue;
+      ip = cand;
+      break;
+    }
+    if (!ip) return { ok: false, reason: 'pool exhausted' };
+    server.dhcpBindings.push({ ip, mac: host.mac, pool: pool.name, hostId });
+  }
+  host.ip = ip;
+  host.mask = pool.mask;
+  host.gateway = pool.defaultRouter;
+  host.dns = pool.dnsServer;
+  host.dhcpServer = serverIp;
+  return { ok: true, ip, mask: pool.mask, gateway: pool.defaultRouter, dns: pool.dnsServer, server: serverIp };
+}
+
+/** Drop a host's lease and clear its DHCP-learned settings. */
+export function dhcpRelease(net: NetworkState, hostId: string): void {
+  const host = net.hosts[hostId];
+  if (!host) return;
+  for (const d of Object.values(net.devices)) d.dhcpBindings = d.dhcpBindings.filter((b) => b.mac !== host.mac);
+  host.ip = undefined;
+  host.mask = undefined;
+  host.gateway = undefined;
+  host.dns = undefined;
+  host.dhcpServer = undefined;
 }
 
 export function traceroute(net: NetworkState, from: string, dst: string): PingResult {

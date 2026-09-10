@@ -4,7 +4,7 @@
 
 Open-source network CLI labs that run entirely in your browser. Practise Cisco IOS switch configuration in a simulated terminal, get graded live against lab objectives, and track progress on your device. No installs, no accounts, no payments.
 
-> Status: early MVP. Cisco IOS switches and routers, PCs with a mini terminal, 46 labs across six modules (Meet the CLI, Learn Switching, Secure the Switch, Learn Routing, Learn OSPF, CCNA Exams), a faithful command resolver, a packet-forwarding simulation with single-area OSPF, and a live grader. See the roadmap below.
+> Status: early MVP. Cisco IOS switches and routers, PCs with a mini terminal, 56 labs across eight modules (Meet the CLI, Learn Switching, Secure the Switch, Learn Routing, Learn OSPF, Learn ACLs, Learn DHCP, CCNA Exams), a faithful command resolver, a packet-forwarding simulation with single-area OSPF, enforced access lists and DHCP, and a live grader. See the roadmap below.
 
 ## Features
 
@@ -13,7 +13,9 @@ Open-source network CLI labs that run entirely in your browser. Practise Cisco I
 - **Router model**: routed interfaces, dot1Q subinterfaces, loopbacks, static and default routes with administrative distance, and an IOS 15 style `show ip route` with connected, local, static and OSPF routes grouped by classful network.
 - **OSPF**: `router ospf`, router IDs (configured or elected from loopbacks and interfaces), `network` statements with wildcard masks and areas, `ip ospf <pid> area`, passive interfaces, interface cost and priority, DR/BDR election per segment, neighbours only when area and subnet match, SPF over the router graph with accumulated metrics, administrative distance 110, and `default-information originate` producing O*E2 defaults. `show ip ospf neighbor`, `show ip ospf interface brief`, `show ip ospf`, `show ip protocols`, `show ip route ospf`.
 - **Multi-device topologies with real forwarding**: labs can hold several switches, routers and PCs. `ping` and `traceroute` walk frames through switches (access, trunk, native and allowed VLANs, router subinterface tags) and route packets hop by hop, and only succeed when the reply can get back too.
-- **PC terminal**: `ipconfig`, `ping` and `tracert` with Windows-style output, so learners test from the host like they would on the job.
+- **Access lists**: standard and extended, numbered and named, with `host`, `any`, wildcards, `eq` ports (names or numbers), ICMP `echo`/`echo-reply`, sequence numbers and remarks. Applied with `ip access-group in|out` on router interfaces and `access-class` on VTY lines. Enforced in the forwarding simulation: a denied echo answers `U.U.U` on IOS and "Destination net unreachable" on a PC, a filtered reply times out, router-originated traffic bypasses outbound lists, and `show access-lists` counts matches.
+- **DHCP**: `ip dhcp pool` with `network`, `default-router`, `dns-server`, excluded addresses, relay with `ip helper-address`, bindings, `show ip dhcp binding` and `show ip dhcp pool`. PCs marked as DHCP clients obtain leases with `ipconfig /renew` (local server first, then a reachable relay target) and drop them with `ipconfig /release`.
+- **PC terminal**: `ipconfig` (with `/all`, `/renew`, `/release`), `ping` and `tracert` with Windows-style output, so learners test from the host like they would on the job.
 - **Labs with live grading**: objectives are declarative checks on device state, command history and ping results, scoped to any device in the topology. The sidebar ticks off objectives as you type.
 - **Progress and sessions on device**: everything is stored in `localStorage`. Nothing leaves your browser.
 
@@ -87,7 +89,7 @@ createState: () =>
   }),
 ```
 
-Every check accepts an optional `device` (a device id, or a host id for `ping`); it defaults to the network's primary device. Available check types: `command` (regex over the expanded command history), `mode`, `hostname`, `vlan-exists`, `vlan-absent`, `interface`, `enable-secret`, `enable-password`, `line`, `user`, `banner`, `domain-name`, `ssh-ready`, `default-gateway`, `saved`, `password-encryption`, `error-seen`, `ping`, `route`, `route-absent`, `learned-route`, `ospf`, `ospf-network`, `ospf-network-absent`, `ospf-neighbors`, `passive-interface`, `default-information-originate`, `trunk-allows`. See `src/engine/grader.ts`.
+Every check accepts an optional `device` (a device id, or a host id for `ping`); it defaults to the network's primary device. Available check types: `command` (regex over the expanded command history), `mode`, `hostname`, `vlan-exists`, `vlan-absent`, `interface`, `enable-secret`, `enable-password`, `line`, `user`, `banner`, `domain-name`, `ssh-ready`, `default-gateway`, `saved`, `password-encryption`, `error-seen`, `ping`, `route`, `route-absent`, `learned-route`, `ospf`, `ospf-network`, `ospf-network-absent`, `ospf-neighbors`, `passive-interface`, `default-information-originate`, `trunk-allows`, `acl-exists`, `acl-entry`, `acl-applied`, `acl-not-applied`, `access-class`, `dhcp-pool`, `dhcp-excluded`, `dhcp-bindings`, `helper-address`, `host-config`. See `src/engine/grader.ts`.
 
 Add the lab to a module file in `src/content/labs/` and add a reference solution to `src/engine/grader.test.ts` so it stays green.
 
@@ -96,8 +98,9 @@ Add the lab to a module file in `src/content/labs/` and add a reference solution
 - [x] Router model: routed interfaces, static routes, `show ip route`, inter-VLAN routing
 - [x] Multi-device labs with a PC terminal and frame forwarding between devices
 - [x] Single-area OSPF
-- [ ] Access control lists enforced in the forwarding simulation
-- [ ] DHCP server and relay, NAT, IPv6 addressing and routing
+- [x] Access control lists enforced in the forwarding simulation
+- [x] DHCP server and relay
+- [ ] NAT, IPv6 addressing and routing
 - [ ] Multi-area OSPF, EtherChannel, spanning-tree behaviour, port security
 - [ ] More vendors through the adapter pattern (JunOS, Arista EOS, Aruba CX)
 - [ ] Sandbox topology editor

@@ -1,6 +1,7 @@
 import { buildNetwork, createRouter, createSwitch, type NetworkState } from '../../engine';
 import type { Lab } from '../types';
 import { chain3 } from './learn-ospf';
+import { aclCampus } from './learn-acls';
 
 const MODULE = 'ccna-exams';
 
@@ -225,6 +226,33 @@ export const ccnaExamLabs: Lab[] = [
       { id: 'secrets', label: 'Enable secrets', checks: [{ type: 'enable-secret', device: 'SW1', equals: 'Capst0ne!' }, { type: 'enable-secret', device: 'R1', equals: 'Capst0ne!' }, { type: 'enable-secret', device: 'R2', equals: 'Capst0ne!' }] },
       { id: 'ping', label: 'End-to-end reachability', checks: [{ type: 'ping', device: 'PC-A', target: '192.168.20.10', success: true, label: 'PC-A pings PC-B' }, { type: 'ping', device: 'PC-A', target: '8.8.8.8', success: true, label: 'PC-A pings 8.8.8.8' }, { type: 'ping', device: 'PC-B', target: '8.8.8.8', success: true, label: 'PC-B pings 8.8.8.8' }] },
       { id: 'save', label: 'Save all three devices', checks: [{ type: 'saved', device: 'SW1' }, { type: 'saved', device: 'R1' }, { type: 'saved', device: 'R2' }] },
+    ],
+  },
+  {
+    id: 'ex-07-services-and-security',
+    moduleId: MODULE,
+    order: 7,
+    title: 'Exam: Services and Security',
+    difficulty: 'Advanced',
+    estimatedMinutes: 25,
+    isExam: true,
+    description: 'Hand out addresses with DHCP for two VLANs, then enforce an access policy for the server without breaking the clients.',
+    scenario:
+      'Sales (VLAN 10, 192.168.10.0/24) and HR (VLAN 20, 192.168.20.0/24) sit behind R1 on a stick; SRV1 (10.10.10.10) is the file and DNS server. Both PCs are DHCP clients with no address.\n\nOn R1:\n\n- DHCP pool SALES for 192.168.10.0/24 with default-router 192.168.10.1 and dns-server 10.10.10.10; pool HR for 192.168.20.0/24 with default-router 192.168.20.1 and dns-server 10.10.10.10; exclude .1 to .9 in both subnets\n- Named extended list HR-POLICY inbound on g0/0.20: HR may reach SRV1 only for DNS (UDP port 53); all other HR traffic to SRV1 is denied; everything else from HR is permitted\n- Standard access-list 5 permitting only host 192.168.10.10, applied with access-class to the VTY lines\n- Save\n\nRenew both PCs. Prove it: PC-A pings SRV1 and PC-B; PC-B pings PC-A but is refused when pinging SRV1. No hints are available.',
+    concepts: ['DHCP', 'Extended ACLs', 'access-class', 'Synthesis'],
+    hints: [],
+    createState: () => {
+      const net = aclCampus();
+      for (const id of ['PC-A', 'PC-B']) Object.assign(net.hosts[id], { ip: undefined, mask: undefined, gateway: undefined, dhcp: true });
+      return net;
+    },
+    objectives: [
+      { id: 'dhcp', label: 'DHCP pools', checks: [{ type: 'dhcp-pool', name: 'SALES', network: '192.168.10.0', mask: '255.255.255.0', defaultRouter: '192.168.10.1', dnsServer: '10.10.10.10', label: 'Pool SALES is correct' }, { type: 'dhcp-pool', name: 'HR', network: '192.168.20.0', mask: '255.255.255.0', defaultRouter: '192.168.20.1', dnsServer: '10.10.10.10', label: 'Pool HR is correct' }, { type: 'dhcp-excluded', from: '192.168.10.1', to: '192.168.10.9' }, { type: 'dhcp-excluded', from: '192.168.20.1', to: '192.168.20.9' }] },
+      { id: 'clients', label: 'Clients hold leases', checks: [{ type: 'host-config', device: 'PC-A', viaDhcp: true, ip: '192.168.10.10', gateway: '192.168.10.1', dns: '10.10.10.10', label: 'PC-A: 192.168.10.10 via DHCP' }, { type: 'host-config', device: 'PC-B', viaDhcp: true, ip: '192.168.20.10', gateway: '192.168.20.1', dns: '10.10.10.10', label: 'PC-B: 192.168.20.10 via DHCP' }] },
+      { id: 'hr', label: 'HR policy', checks: [{ type: 'acl-entry', name: 'HR-POLICY', action: 'permit', protocol: 'udp', src: '192.168.20.0 0.0.0.255', dst: 'host 10.10.10.10', dstPort: 53, position: 1, label: 'HR-POLICY permits udp to SRV1 eq 53 first' }, { type: 'acl-entry', name: 'HR-POLICY', action: 'deny', protocol: 'ip', src: '192.168.20.0 0.0.0.255', dst: 'host 10.10.10.10', position: 2, label: 'HR-POLICY then denies ip to SRV1' }, { type: 'acl-entry', name: 'HR-POLICY', action: 'permit', protocol: 'ip', src: 'any', dst: 'any', position: 3, label: 'HR-POLICY ends with permit ip any any' }, { type: 'acl-applied', interface: 'g0/0.20', direction: 'in', name: 'HR-POLICY' }] },
+      { id: 'vty', label: 'Management access', checks: [{ type: 'acl-entry', name: '5', action: 'permit', src: 'host 192.168.10.10', label: 'access-list 5 permit host 192.168.10.10' }, { type: 'access-class', name: '5' }] },
+      { id: 'prove', label: 'Prove the policy', checks: [{ type: 'ping', device: 'PC-A', target: '10.10.10.10', success: true, label: 'PC-A pings SRV1' }, { type: 'ping', device: 'PC-A', target: '192.168.20.10', success: true, label: 'PC-A pings PC-B' }, { type: 'ping', device: 'PC-B', target: '192.168.10.10', success: true, label: 'PC-B pings PC-A' }, { type: 'ping', device: 'PC-B', target: '10.10.10.10', success: false, denied: true, label: 'PC-B is refused by SRV1 policy' }] },
+      { id: 'save', label: 'Save R1', checks: [{ type: 'saved' }] },
     ],
   },
 ];

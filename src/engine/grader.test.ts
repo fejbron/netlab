@@ -100,6 +100,20 @@ describe('reference solutions pass', () => {
       'R2: en', 'R2: conf t', 'R2: int g0/1', 'R2: ip address 10.0.0.2 255.255.255.252', 'R2: no shutdown', 'R2: int g0/0', 'R2: ip address 203.0.113.2 255.255.255.252', 'R2: no shutdown', 'R2: exit', 'R2: ip route 0.0.0.0 0.0.0.0 203.0.113.1', 'R2: router ospf 1', 'R2: router-id 2.2.2.2', 'R2: network 10.0.0.0 0.0.0.3 area 0', 'R2: default-information originate', 'R2: exit', 'R2: enable secret Capst0ne!', 'R2: end', 'R2: write memory',
       'PC-A: ping 192.168.20.10', 'PC-A: ping 8.8.8.8', 'PC-B: ping 8.8.8.8',
     ],
+    'acl-01-first-standard-acl': ['en', 'conf t', 'access-list 10 deny 192.168.20.0 0.0.0.255', 'access-list 10 permit any', 'int g0/1', 'ip access-group 10 out', 'end', 'PC-B: ping 10.10.10.10', 'PC-A: ping 10.10.10.10', 'show access-lists'],
+    'acl-02-extended-named-acl': ['en', 'conf t', 'ip access-list extended NO-PING-SRV', 'deny icmp 192.168.10.0 0.0.0.255 host 10.10.10.10 echo', 'permit ip any any', 'int g0/0.10', 'ip access-group NO-PING-SRV in', 'end', 'PC-A: ping 10.10.10.10', 'PC-A: ping 192.168.20.10', 'PC-B: ping 10.10.10.10'],
+    'acl-03-implicit-deny': ['en', 'show access-lists', 'conf t', 'ip access-list extended SERVER-POLICY', 'permit ip any any', 'end', 'PC-B: ping 192.168.10.10', 'PC-B: ping 10.10.10.10'],
+    'acl-04-protect-vty': ['en', 'conf t', 'access-list 5 remark Admin PC only', 'access-list 5 permit host 192.168.10.10', 'line vty 0 4', 'access-class 5 in', 'end', 'show running-config'],
+    'acl-05-exam-access-policy': ['en', 'conf t', 'ip access-list extended HR-POLICY', 'deny ip 192.168.20.0 0.0.0.255 host 10.10.10.10', 'permit ip any any', 'ip access-list extended SALES-POLICY', 'permit tcp 192.168.10.0 0.0.0.255 host 10.10.10.10 eq 80', 'permit icmp 192.168.10.0 0.0.0.255 host 10.10.10.10', 'deny ip 192.168.10.0 0.0.0.255 host 10.10.10.10', 'permit ip any any', 'exit', 'access-list 5 permit host 192.168.10.10', 'int g0/0.20', 'ip access-group HR-POLICY in', 'int g0/0.10', 'ip access-group SALES-POLICY in', 'line vty 0 4', 'access-class 5 in', 'end', 'write memory', 'PC-B: ping 10.10.10.10', 'PC-B: ping 192.168.10.10', 'PC-A: ping 10.10.10.10', 'PC-A: ping 192.168.20.10'],
+    'dh-01-dhcp-server': ['PC-A: ipconfig /renew', 'en', 'conf t', 'ip dhcp excluded-address 192.168.10.1 192.168.10.9', 'ip dhcp pool SALES', 'network 192.168.10.0 255.255.255.0', 'default-router 192.168.10.1', 'dns-server 8.8.8.8', 'end', 'PC-A: ipconfig /renew', 'PC-A: ping 192.168.10.1', 'show ip dhcp binding'],
+    'dh-02-bindings-and-pool': ['PC-A: ipconfig /renew', 'PC-B: ipconfig /renew', 'en', 'show ip dhcp binding', 'show ip dhcp pool', 'PC-A: ping 192.168.10.11'],
+    'dh-03-dhcp-relay': ['PC-A: ipconfig /renew', 'en', 'conf t', 'int g0/0', 'ip helper-address 10.0.0.2', 'end', 'PC-A: ipconfig /renew', 'PC-A: ping 10.0.0.2'],
+    'dh-04-wrong-gateway': ['PC-A: ipconfig /all', 'en', 'conf t', 'ip dhcp pool SALES', 'default-router 192.168.10.1', 'end', 'PC-A: ipconfig /renew', 'PC-A: ping 10.0.0.2'],
+    'ex-07-services-and-security': [
+      'en', 'conf t', 'ip dhcp excluded-address 192.168.10.1 192.168.10.9', 'ip dhcp excluded-address 192.168.20.1 192.168.20.9', 'ip dhcp pool SALES', 'network 192.168.10.0 255.255.255.0', 'default-router 192.168.10.1', 'dns-server 10.10.10.10', 'ip dhcp pool HR', 'network 192.168.20.0 255.255.255.0', 'default-router 192.168.20.1', 'dns-server 10.10.10.10', 'exit',
+      'ip access-list extended HR-POLICY', 'permit udp 192.168.20.0 0.0.0.255 host 10.10.10.10 eq 53', 'deny ip 192.168.20.0 0.0.0.255 host 10.10.10.10', 'permit ip any any', 'int g0/0.20', 'ip access-group HR-POLICY in', 'exit', 'access-list 5 permit host 192.168.10.10', 'line vty 0 4', 'access-class 5 in', 'end', 'write memory',
+      'PC-A: ipconfig /renew', 'PC-B: ipconfig /renew', 'PC-A: ping 10.10.10.10', 'PC-A: ping 192.168.20.10', 'PC-B: ping 192.168.10.10', 'PC-B: ping 10.10.10.10',
+    ],
   };
 
   it('covers every lab', () => {

@@ -1,15 +1,20 @@
 import type { CommandDef } from '../resolver';
-import type { DeviceState, DeviceType, InterfaceState, Mode } from '../types';
+import type { Acl, DeviceState, DeviceType, InterfaceState, Mode } from '../types';
 import { isSvi, normalizeInterfaceName, shortInterfaceName, sviVlanId } from '../interfaces';
-import { isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, routingTable, type NetworkState } from '../network';
-import { isValidIp, isValidMask, networkAddress, parseVlanList } from './net';
+import { isExtendedNumber, isStandardNumber, nextSeq, parseExtendedRule, parseStandardRule } from '../acl';
+import { applyAclHits, isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, routingTable, type NetworkState } from '../network';
+import { intToIp, ipToInt, isValidIp, isValidMask, networkAddress, parseVlanList } from './net';
 import {
   defaultVlanName,
   renderConfigBody,
+  showAccessLists,
   showHistory,
   showInterfaceSwitchport,
   showInterfacesStatus,
   showInterfacesTrunk,
+  showIpDhcpBinding,
+  showIpDhcpPool,
+  showIpInterface,
   showIpInterfaceBrief,
   showIpOspf,
   showIpOspfInterfaceBrief,
@@ -121,6 +126,25 @@ export const WORD_HELP: Record<string, string> = {
   priority: 'Router priority',
   neighbor: 'Neighbor list',
   protocols: 'IP routing protocol process parameters and statistics',
+  'access-list': 'Add an access list entry',
+  'access-lists': 'List access lists',
+  'access-group': 'Specify access control for packets',
+  'access-class': 'Filter connections based on an IP access list',
+  standard: 'Standard Access List',
+  extended: 'Extended Access List',
+  permit: 'Specify packets to forward',
+  deny: 'Specify packets to reject',
+  remark: 'Access list entry comment',
+  in: 'inbound packets',
+  out: 'outbound packets',
+  dhcp: 'Configure DHCP server and relay parameters',
+  pool: 'Configure DHCP address pools',
+  'excluded-address': 'Prevent DHCP from assigning certain addresses',
+  'default-router': 'Default routers',
+  'dns-server': 'DNS servers',
+  'helper-address': 'Specify a destination address for UDP broadcasts',
+  binding: 'DHCP address bindings',
+  lease: 'Address lease time',
 };
 
 // ---------------------------------------------------------------------------
@@ -274,11 +298,12 @@ function enterLine(state: DeviceState, line: 'con' | 'vty') {
 function pingCommand({ state, network, nodeId }: Ctx, target: string): string[] {
   if (!isValidIp(target)) return ['% Unrecognized host or address, or protocol not running.'];
   const result = netPing(network, nodeId, target);
-  state.pings.push({ target, success: result.success });
+  applyAclHits(network, result.hits);
+  state.pings.push({ target, success: result.success, ...(result.denied ? { denied: true } : {}) });
   return [
     'Type escape sequence to abort.',
     `Sending 5, 100-byte ICMP Echos to ${target}, timeout is 2 seconds:`,
-    result.success ? '!!!!!' : '.....',
+    result.success ? '!!!!!' : result.denied ? 'U.U.U' : '.....',
     result.success ? 'Success rate is 100 percent (5/5), round-trip min/avg/max = 1/2/4 ms' : 'Success rate is 0 percent (0/5)',
   ];
 }
@@ -288,8 +313,142 @@ function tracerouteCommand({ network, nodeId }: Ctx, target: string): string[] {
   const result = netPing(network, nodeId, target);
   const out = ['Type escape sequence to abort.', `Tracing the route to ${target}`, 'VRF info: (vrf in name/id, vrf out name/id)'];
   result.hops.forEach((h, i) => out.push(`  ${String(i + 1).padStart(2)} ${h.ip ?? nodeName(network, h.node)} 1 msec 1 msec 2 msec`));
-  if (!result.success) out.push(`  ${String(result.hops.length + 1).padStart(2)}  *  *  *`);
+  if (!result.success) out.push(result.denied ? `  ${String(result.hops.length + 1).padStart(2)} ${result.denied.ip ?? nodeName(network, result.denied.node)} !A  !A  !A` : `  ${String(result.hops.length + 1).padStart(2)}  *  *  *`);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// access lists
+
+function aclKindForNumber(n: number): Acl['kind'] | null {
+  if (isStandardNumber(n)) return 'standard';
+  if (isExtendedNumber(n)) return 'extended';
+  return null;
+}
+
+function addAclRule(state: DeviceState, name: string, kind: Acl['kind'], action: 'permit' | 'deny', ruleText: string, seq?: number): string[] | void {
+  const acl = (state.acls[name] ??= { name, kind, entries: [] });
+  if (acl.kind !== kind) return ['% Access list type mismatch'];
+  const tokens = ruleText.trim().split(/\s+/);
+  const parsed = kind === 'standard' ? parseStandardRule(action, tokens) : parseExtendedRule(action, tokens);
+  if (!parsed) return [INVALID_INPUT];
+  const s = seq ?? nextSeq(acl);
+  if (acl.entries.some((e) => e.seq === s)) return ['% Duplicate sequence number.'];
+  acl.entries.push({ ...parsed, seq: s, matches: 0 });
+  acl.entries.sort((a, b) => a.seq - b.seq);
+}
+
+function numberedAcl(state: DeviceState, numberText: string, action: 'permit' | 'deny' | 'remark', rest: string): string[] | void {
+  const n = Number(numberText);
+  const kind = /^\d+$/.test(numberText) ? aclKindForNumber(n) : null;
+  if (!kind) return [INVALID_INPUT];
+  if (action === 'remark') {
+    const acl = (state.acls[numberText] ??= { name: numberText, kind, entries: [] });
+    acl.entries.push({ seq: nextSeq(acl), action: 'remark', remark: rest, src: { kind: 'any' }, matches: 0 });
+    return;
+  }
+  return addAclRule(state, numberText, kind, action, rest);
+}
+
+function enterNamedAcl(state: DeviceState, kind: Acl['kind'], name: string): string[] | void {
+  if (/^\d+$/.test(name)) {
+    const numberedKind = aclKindForNumber(Number(name));
+    if (numberedKind !== kind) return [INVALID_INPUT];
+  }
+  const existing = state.acls[name];
+  if (existing && existing.kind !== kind) return [`% Access list ${name} already exists as a ${existing.kind} list`];
+  state.acls[name] ??= { name, kind, entries: [] };
+  state.mode = kind === 'standard' ? 'acl-std' : 'acl-ext';
+  state.currentAcl = name;
+  state.currentInterface = undefined;
+  state.currentInterfaces = undefined;
+  state.currentVlan = undefined;
+  state.currentLine = undefined;
+}
+
+function aclModeDefs(kind: Acl['kind'], jumps: Def[]): Def[] {
+  const acl = (state: DeviceState) => state.acls[state.currentAcl!];
+  return [
+    { pattern: 'permit <rule...>', help: 'Specify packets to forward', run: ({ state }, a) => addAclRule(state, state.currentAcl!, kind, 'permit', a.rule) },
+    { pattern: 'deny <rule...>', help: 'Specify packets to reject', run: ({ state }, a) => addAclRule(state, state.currentAcl!, kind, 'deny', a.rule) },
+    { pattern: '<sequence> permit <rule...>', help: 'Sequence Number', run: ({ state }, a) => (/^\d+$/.test(a.sequence) ? addAclRule(state, state.currentAcl!, kind, 'permit', a.rule, Number(a.sequence)) : [INVALID_INPUT]) },
+    { pattern: '<sequence> deny <rule...>', help: 'Sequence Number', run: ({ state }, a) => (/^\d+$/.test(a.sequence) ? addAclRule(state, state.currentAcl!, kind, 'deny', a.rule, Number(a.sequence)) : [INVALID_INPUT]) },
+    { pattern: 'remark <text...>', help: 'Access list entry comment', run: ({ state }, a) => void acl(state).entries.push({ seq: nextSeq(acl(state)), action: 'remark', remark: a.text, src: { kind: 'any' }, matches: 0 }) },
+    { pattern: 'no <sequence>', help: 'Remove an entry by sequence number', run: ({ state }, a) => { const s = Number(a.sequence); const list = acl(state); const before = list.entries.length; list.entries = list.entries.filter((e) => e.seq !== s); if (list.entries.length === before) return ['% Sequence number not found']; } },
+    { pattern: 'exit', help: 'Exit from access-list configuration mode', run: ({ state }) => { state.mode = 'config'; state.currentAcl = undefined; } },
+    ...EXIT_CONFIG,
+    ...jumps,
+  ];
+}
+
+function applyAccessGroup(state: DeviceState, name: string, direction: 'in' | 'out'): string[] | void {
+  if (state.currentInterfaces && state.currentInterfaces.length > 1) return [INVALID_INPUT];
+  const i = currentInterface(state);
+  if (isLoopback(i.name)) return ['% Access lists cannot be applied to loopback interfaces in this simulator.'];
+  if (direction === 'in') i.aclIn = name;
+  else i.aclOut = name;
+}
+
+// ---------------------------------------------------------------------------
+// dhcp
+
+function enterDhcpPool(state: DeviceState, name: string) {
+  state.dhcpPools[name] ??= { name };
+  state.mode = 'dhcp';
+  state.currentPool = name;
+  state.currentInterface = undefined;
+  state.currentInterfaces = undefined;
+  state.currentVlan = undefined;
+  state.currentLine = undefined;
+}
+
+function maskFromArg(text: string): string | null {
+  if (text.startsWith('/')) {
+    const n = Number(text.slice(1));
+    if (!/^\d+$/.test(text.slice(1)) || n < 0 || n > 32) return null;
+    return intToIp(n === 0 ? 0 : (0xffffffff << (32 - n)) >>> 0);
+  }
+  return isValidMask(text) ? text : null;
+}
+
+const dhcpConfigBase = (): Def[] => [
+  {
+    pattern: 'network <address> <mask>',
+    help: 'Network number and mask',
+    run: ({ state }, a) => {
+      const mask = maskFromArg(a.mask);
+      if (!isValidIp(a.address) || !mask) return [INVALID_INPUT];
+      const pool = state.dhcpPools[state.currentPool!];
+      pool.network = networkAddress(a.address, mask);
+      pool.mask = mask;
+    },
+  },
+  { pattern: 'no network', help: 'Remove the network', run: ({ state }) => { const p = state.dhcpPools[state.currentPool!]; p.network = undefined; p.mask = undefined; } },
+  { pattern: 'default-router <address>', help: 'Default routers', run: ({ state }, a) => { if (!isValidIp(a.address)) return [INVALID_INPUT]; state.dhcpPools[state.currentPool!].defaultRouter = a.address; } },
+  { pattern: 'no default-router', help: 'Remove the default router', run: ({ state }) => void (state.dhcpPools[state.currentPool!].defaultRouter = undefined) },
+  { pattern: 'dns-server <addresses...>', help: 'DNS servers', run: ({ state }, a) => { const first = a.addresses.split(/\s+/)[0]; if (!isValidIp(first)) return [INVALID_INPUT]; state.dhcpPools[state.currentPool!].dnsServer = first; } },
+  { pattern: 'no dns-server', help: 'Remove DNS servers', run: ({ state }) => void (state.dhcpPools[state.currentPool!].dnsServer = undefined) },
+  { pattern: 'domain-name <name>', help: 'Domain name', run: ({ state }, a) => void (state.dhcpPools[state.currentPool!].domainName = a.name) },
+  { pattern: 'lease <days>', help: 'Address lease time', run: () => undefined },
+  { pattern: 'lease <days> <hours>', help: 'Address lease time', run: () => undefined },
+  { pattern: 'lease <days> <hours> <minutes>', help: 'Address lease time', run: () => undefined },
+  { pattern: 'lease infinite', help: 'Infinite lease', run: () => undefined },
+  { pattern: 'exit', help: 'Exit from DHCP pool configuration mode', run: ({ state }) => { state.mode = 'config'; state.currentPool = undefined; } },
+  ...EXIT_CONFIG,
+];
+
+function excludeRange(state: DeviceState, from: string, to?: string): string[] | void {
+  const end = to ?? from;
+  if (!isValidIp(from) || !isValidIp(end) || (ipToInt(from) ?? 0) > (ipToInt(end) ?? 0)) return [INVALID_INPUT];
+  state.dhcpExcluded = state.dhcpExcluded.filter((r) => !(r.from === from && r.to === end));
+  state.dhcpExcluded.push({ from, to: end });
+}
+
+function unexcludeRange(state: DeviceState, from: string, to?: string): string[] | void {
+  const end = to ?? from;
+  const before = state.dhcpExcluded.length;
+  state.dhcpExcluded = state.dhcpExcluded.filter((r) => !(r.from === from && r.to === end));
+  if (state.dhcpExcluded.length === before) return ['% No such excluded range'];
 }
 
 const HELP_TEXT = [
@@ -358,6 +517,20 @@ const SHOW_ROUTER_USER: Def[] = [
   { pattern: 'show ip ospf interface', help: 'Interface information', run: (ctx) => ospfBrief(ctx) },
   { pattern: 'show ip ospf', help: 'OSPF information', run: ({ state, network, nodeId }) => (state.ospf ? showIpOspf(state, ospfRouterId(network, nodeId), ospfInterfaces(network, nodeId), ospfNeighbors(network, nodeId)) : ['%OSPF: No router process configured']) },
   { pattern: 'show ip protocols', help: 'IP routing protocol process parameters and statistics', run: ({ state, network, nodeId }) => showIpProtocols(state, ospfRouterId(network, nodeId), ospfInterfaces(network, nodeId), ospfNeighbors(network, nodeId)) },
+  { pattern: 'show access-lists', help: 'List access lists', run: ({ state }) => showAccessLists(Object.values(state.acls)) },
+  { pattern: 'show access-lists <name>', help: 'Access list name or number', run: ({ state }, a) => (state.acls[a.name] ? showAccessLists([state.acls[a.name]]) : []) },
+  { pattern: 'show ip access-lists', help: 'List IP access lists', run: ({ state }) => showAccessLists(Object.values(state.acls)) },
+  { pattern: 'show ip access-lists <name>', help: 'Access list name or number', run: ({ state }, a) => (state.acls[a.name] ? showAccessLists([state.acls[a.name]]) : []) },
+  { pattern: 'show ip dhcp binding', help: 'DHCP address bindings', run: ({ state }) => showIpDhcpBinding(state) },
+  { pattern: 'show ip dhcp pool', help: 'DHCP pool information', run: ({ state }) => showIpDhcpPool(state) },
+  {
+    pattern: 'show ip interface <interface>',
+    help: 'IP interface status and configuration',
+    run: ({ state }, a) => {
+      const i = findInterface(state, a.interface);
+      return i ? showIpInterface(i) : [INVALID_INPUT];
+    },
+  },
   {
     pattern: 'show interfaces <interface>',
     help: 'Interface status and configuration',
@@ -572,7 +745,14 @@ function enterRouterOspf(state: DeviceState, pidText: string): string[] | void {
 const ROUTER_JUMPS: Def[] = [
   ...COMMON_JUMPS,
   { pattern: 'router ospf <process>', help: 'Open Shortest Path First (OSPF)', run: ({ state }, a) => enterRouterOspf(state, a.process) },
+  { pattern: 'ip access-list standard <name>', help: 'Standard Access List', run: ({ state }, a) => enterNamedAcl(state, 'standard', a.name) },
+  { pattern: 'ip access-list extended <name>', help: 'Extended Access List', run: ({ state }, a) => enterNamedAcl(state, 'extended', a.name) },
+  { pattern: 'ip dhcp pool <name>', help: 'Configure DHCP address pools', run: ({ state }, a) => enterDhcpPool(state, a.name) },
 ];
+
+export const ACL_STD_CONFIG: Def[] = aclModeDefs('standard', ROUTER_JUMPS);
+export const ACL_EXT_CONFIG: Def[] = aclModeDefs('extended', ROUTER_JUMPS);
+export const DHCP_CONFIG: Def[] = [...dhcpConfigBase(), ...ROUTER_JUMPS];
 
 function parseArea(text: string): number | null {
   if (/^\d+$/.test(text)) return Number(text);
@@ -655,6 +835,19 @@ export const GLOBAL_CONFIG_ROUTER: Def[] = [
   { pattern: 'no ip routing', help: 'Disable IP routing', run: ({ state }) => void (state.ipRouting = false) },
   { pattern: 'ip cef', help: 'Cisco Express Forwarding', run: () => undefined },
   { pattern: 'no ip domain-lookup', help: 'Disable DNS lookups', run: () => undefined },
+  { pattern: 'access-list <number> permit <rule...>', help: 'Specify packets to forward', run: ({ state }, a) => numberedAcl(state, a.number, 'permit', a.rule) },
+  { pattern: 'access-list <number> deny <rule...>', help: 'Specify packets to reject', run: ({ state }, a) => numberedAcl(state, a.number, 'deny', a.rule) },
+  { pattern: 'access-list <number> remark <text...>', help: 'Access list entry comment', run: ({ state }, a) => numberedAcl(state, a.number, 'remark', a.text) },
+  { pattern: 'no access-list <number>', help: 'Remove an access list', run: ({ state }, a) => { if (!state.acls[a.number]) return ['% Access list not found']; delete state.acls[a.number]; } },
+  { pattern: 'no ip access-list standard <name>', help: 'Remove a standard access list', run: ({ state }, a) => void delete state.acls[a.name] },
+  { pattern: 'no ip access-list extended <name>', help: 'Remove an extended access list', run: ({ state }, a) => void delete state.acls[a.name] },
+  { pattern: 'ip dhcp excluded-address <from> <to>', help: 'Prevent DHCP from assigning certain addresses', run: ({ state }, a) => excludeRange(state, a.from, a.to) },
+  { pattern: 'ip dhcp excluded-address <from>', help: 'Prevent DHCP from assigning certain addresses', run: ({ state }, a) => excludeRange(state, a.from) },
+  { pattern: 'no ip dhcp excluded-address <from> <to>', help: 'Remove an excluded range', run: ({ state }, a) => unexcludeRange(state, a.from, a.to) },
+  { pattern: 'no ip dhcp excluded-address <from>', help: 'Remove an excluded address', run: ({ state }, a) => unexcludeRange(state, a.from) },
+  { pattern: 'no ip dhcp pool <name>', help: 'Remove a DHCP pool', run: ({ state }, a) => { if (!state.dhcpPools[a.name]) return ['% Pool not found']; delete state.dhcpPools[a.name]; state.dhcpBindings = state.dhcpBindings.filter((b) => b.pool !== a.name); } },
+  { pattern: 'service dhcp', help: 'Enable DHCP server and relay agent', run: () => undefined },
+  { pattern: 'no service dhcp', help: 'Disable DHCP server and relay agent', run: () => undefined },
 ];
 
 const INTERFACE_COMMON: Def[] = [
@@ -727,6 +920,15 @@ export const INTERFACE_CONFIG_ROUTER: Def[] = [
   { pattern: 'ip ospf priority <priority>', help: 'Router priority', run: ({ state }, a) => { const p = Number(a.priority); if (!/^\d+$/.test(a.priority) || p > 255) return [INVALID_INPUT]; return forEachTarget(state, (i) => void (i.ospfPriority = p)); } },
   { pattern: 'ip ospf <process> area <area>', help: 'Set the OSPF area ID', run: ({ state }, a) => { const area = parseArea(a.area); if (!/^\d+$/.test(a.process) || area === null) return [INVALID_INPUT]; if (!state.ospf) state.ospf = { processId: Number(a.process), networks: [], passiveDefault: false, passiveInterfaces: [], activeInterfaces: [], defaultInformationOriginate: false }; return forEachTarget(state, (i) => void (i.ospfArea = area)); } },
   { pattern: 'no ip ospf <process> area <area>', help: 'Remove OSPF from the interface', run: ({ state }) => forEachTarget(state, (i) => void (i.ospfArea = undefined)) },
+  { pattern: 'ip access-group <acl> in', help: 'inbound packets', run: ({ state }, a) => applyAccessGroup(state, a.acl, 'in') },
+  { pattern: 'ip access-group <acl> out', help: 'outbound packets', run: ({ state }, a) => applyAccessGroup(state, a.acl, 'out') },
+  { pattern: 'no ip access-group <acl> in', help: 'Remove the inbound access list', run: ({ state }) => forEachTarget(state, (i) => void (i.aclIn = undefined)) },
+  { pattern: 'no ip access-group <acl> out', help: 'Remove the outbound access list', run: ({ state }) => forEachTarget(state, (i) => void (i.aclOut = undefined)) },
+  { pattern: 'no ip access-group in', help: 'Remove the inbound access list', run: ({ state }) => forEachTarget(state, (i) => void (i.aclIn = undefined)) },
+  { pattern: 'no ip access-group out', help: 'Remove the outbound access list', run: ({ state }) => forEachTarget(state, (i) => void (i.aclOut = undefined)) },
+  { pattern: 'ip helper-address <address>', help: 'Specify a destination address for UDP broadcasts', run: ({ state }, a) => { if (!isValidIp(a.address)) return [INVALID_INPUT]; return forEachTarget(state, (i) => void (i.helperAddress = a.address)); } },
+  { pattern: 'no ip helper-address', help: 'Remove the helper address', run: ({ state }) => forEachTarget(state, (i) => void (i.helperAddress = undefined)) },
+  { pattern: 'no ip helper-address <address>', help: 'Remove the helper address', run: ({ state }) => forEachTarget(state, (i) => void (i.helperAddress = undefined)) },
   ...ROUTER_JUMPS,
 ];
 
@@ -753,6 +955,9 @@ function lineConfig(jumps: Def[]): Def[] {
     { pattern: 'exec-timeout <minutes> <seconds>', help: 'Set the EXEC timeout', run: () => undefined },
     { pattern: 'exec-timeout <minutes>', help: 'Set the EXEC timeout', run: () => undefined },
     { pattern: 'logging synchronous', help: 'Synchronized message output', run: () => undefined },
+    { pattern: 'access-class <acl> in', help: 'Filter connections based on an IP access list', run: ({ state }, a) => { if (state.currentLine !== 'vty') return ['% access-class is only supported on VTY lines.']; currentLine(state).accessClass = a.acl; } },
+    { pattern: 'no access-class <acl> in', help: 'Remove the access class', run: ({ state }) => void (currentLine(state).accessClass = undefined) },
+    { pattern: 'no access-class in', help: 'Remove the access class', run: ({ state }) => void (currentLine(state).accessClass = undefined) },
     { pattern: 'exit', help: 'Exit from line configuration mode', run: ({ state }) => { state.mode = 'config'; state.currentLine = undefined; } },
     ...EXIT_CONFIG,
     ...jumps,
@@ -779,6 +984,12 @@ export function defsForMode(mode: Mode, deviceType: DeviceType = 'switch'): Def[
       return router ? LINE_CONFIG_ROUTER : LINE_CONFIG;
     case 'router':
       return ROUTER_CONFIG;
+    case 'acl-std':
+      return ACL_STD_CONFIG;
+    case 'acl-ext':
+      return ACL_EXT_CONFIG;
+    case 'dhcp':
+      return DHCP_CONFIG;
   }
 }
 

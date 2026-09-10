@@ -1,7 +1,7 @@
 import { normalizeInterfaceName } from './interfaces';
 import { renderConfigBody } from './ios/show';
 import { ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, type NetworkState, type RouteEntry } from './network';
-import type { CliErrorKind, DeviceState, LineState, Mode, PortMode } from './types';
+import type { AclAddr, AclEntry, AclProtocol, CliErrorKind, DeviceState, LineState, Mode, PortMode } from './types';
 
 interface Base {
   /** Device (or host, for ping) the check targets. Defaults to the network's primary device. */
@@ -44,7 +44,7 @@ export type Check = Base &
     | { type: 'saved' }
     | { type: 'password-encryption' }
     | { type: 'error-seen'; error: CliErrorKind }
-    | { type: 'ping'; target: string; success?: boolean }
+    | { type: 'ping'; target: string; success?: boolean; denied?: boolean }
     | { type: 'route'; destination: string; mask: string; via?: string }
     | { type: 'route-absent'; destination: string; mask: string }
     /** A prefix present in the live routing table, optionally from a given source. */
@@ -57,6 +57,21 @@ export type Check = Base &
     | { type: 'default-information-originate' }
     /** Trunk allows at least these VLANs (explicit list or "all"). */
     | { type: 'trunk-allows'; name: string; vlans: number[] }
+    | { type: 'acl-exists'; name: string; kind?: 'standard' | 'extended' }
+    /**
+     * An entry is present. Addresses are written as in IOS: "any", "host 10.1.1.1",
+     * "192.168.1.0 0.0.0.255". `position` is the 1-based index among non-remark entries.
+     */
+    | { type: 'acl-entry'; name: string; action: 'permit' | 'deny'; protocol?: AclProtocol; src?: string; dst?: string; dstPort?: number; icmpType?: 'echo' | 'echo-reply'; position?: number }
+    | { type: 'acl-applied'; interface: string; direction: 'in' | 'out'; name?: string }
+    | { type: 'acl-not-applied'; interface: string; direction: 'in' | 'out' }
+    | { type: 'access-class'; name?: string }
+    | { type: 'dhcp-pool'; name: string; network?: string; mask?: string; defaultRouter?: string; dnsServer?: string }
+    | { type: 'dhcp-excluded'; from: string; to?: string }
+    | { type: 'dhcp-bindings'; min: number }
+    | { type: 'helper-address'; interface: string; address: string }
+    /** Host settings (device = host id). `viaDhcp` requires a live lease. */
+    | { type: 'host-config'; ip?: string; mask?: string; gateway?: string; dns?: string; viaDhcp?: boolean; inSubnet?: { network: string; mask: string } }
   );
 
 export interface Objective {
@@ -144,7 +159,49 @@ function describe(check: Check): string {
       return `default-information originate is configured${on}`;
     case 'trunk-allows':
       return `${check.name} allows VLANs ${check.vlans.join(',')}${on}`;
+    case 'acl-exists':
+      return `${check.kind ? `${check.kind[0].toUpperCase()}${check.kind.slice(1)} a` : 'A'}ccess list ${check.name} exists${on}`;
+    case 'acl-entry':
+      return `${check.name}: ${check.action}${check.protocol ? ` ${check.protocol}` : ''}${check.src ? ` ${check.src}` : ''}${check.dst ? ` ${check.dst}` : ''}${check.dstPort ? ` eq ${check.dstPort}` : ''}${check.icmpType ? ` ${check.icmpType}` : ''}${check.position ? ` (entry ${check.position})` : ''}${on}`;
+    case 'acl-applied':
+      return `${check.name ?? 'An access list'} is applied ${check.direction}bound on ${check.interface}${on}`;
+    case 'acl-not-applied':
+      return `No ${check.direction}bound access list on ${check.interface}${on}`;
+    case 'access-class':
+      return `VTY lines are protected with access-class${check.name ? ` ${check.name}` : ''}${on}`;
+    case 'dhcp-pool':
+      return `DHCP pool ${check.name}${check.network ? ` for ${check.network}` : ''}${check.defaultRouter ? ` with default-router ${check.defaultRouter}` : ''}${on}`;
+    case 'dhcp-excluded':
+      return `${check.from}${check.to ? ` to ${check.to}` : ''} excluded from DHCP${on}`;
+    case 'dhcp-bindings':
+      return `At least ${check.min} DHCP binding${check.min === 1 ? '' : 's'}${on}`;
+    case 'helper-address':
+      return `${check.interface} relays DHCP to ${check.address}${on}`;
+    case 'host-config':
+      return `${check.device ?? 'Host'} has ${check.viaDhcp ? 'a DHCP lease' : 'the expected IP settings'}${check.ip ? ` (${check.ip})` : ''}`;
   }
+}
+
+function addrText(a: AclAddr): string {
+  if (a.kind === 'any') return 'any';
+  if (a.kind === 'host') return `host ${a.ip}`;
+  return `${a.address} ${a.wildcard}`;
+}
+
+function normalizeAddrText(text: string): string {
+  const t = text.trim().replace(/\s+/g, ' ');
+  // Bare address means host.
+  return /^\d+\.\d+\.\d+\.\d+$/.test(t) ? `host ${t}` : t;
+}
+
+function entryMatchesCheck(e: AclEntry, check: Extract<Check, { type: 'acl-entry' }>): boolean {
+  if (e.action !== check.action) return false;
+  if (check.protocol !== undefined && e.protocol !== check.protocol) return false;
+  if (check.src !== undefined && addrText(e.src) !== normalizeAddrText(check.src)) return false;
+  if (check.dst !== undefined && addrText(e.dst ?? { kind: 'any' }) !== normalizeAddrText(check.dst)) return false;
+  if (check.dstPort !== undefined && e.dstPort !== check.dstPort) return false;
+  if (check.icmpType !== undefined && e.icmpType !== check.icmpType) return false;
+  return true;
 }
 
 function sameList(a: 'all' | number[], b: 'all' | number[]): boolean {
@@ -163,7 +220,22 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
   if (check.type === 'ping') {
     const id = check.device ?? net.primary;
     const pings = net.devices[id]?.pings ?? net.hosts[id]?.pings ?? [];
-    return pings.some((p) => p.target === check.target && (check.success === undefined || p.success === check.success));
+    return pings.some((p) => p.target === check.target && (check.success === undefined || p.success === check.success) && (check.denied === undefined || Boolean(p.denied) === check.denied));
+  }
+  if (check.type === 'command' && check.device && net.hosts[check.device]) {
+    const re = new RegExp(check.pattern, 'i');
+    return net.hosts[check.device].commandHistory.some((c) => re.test(c));
+  }
+  if (check.type === 'host-config') {
+    const h = net.hosts[check.device ?? ''];
+    if (!h) return false;
+    if (check.viaDhcp && !(h.dhcp && h.dhcpServer && h.ip)) return false;
+    if (check.ip !== undefined && h.ip !== check.ip) return false;
+    if (check.mask !== undefined && h.mask !== check.mask) return false;
+    if (check.gateway !== undefined && h.gateway !== check.gateway) return false;
+    if (check.dns !== undefined && h.dns !== check.dns) return false;
+    if (check.inSubnet && !(h.ip && h.mask === check.inSubnet.mask && sameSubnetText(h.ip, check.inSubnet.network, check.inSubnet.mask))) return false;
+    return true;
   }
   const state = deviceFor(check, net);
   if (!state) return false;
@@ -265,7 +337,59 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
       if (!i || i.mode !== 'trunk') return false;
       return i.trunkAllowed === 'all' || check.vlans.every((v) => (i.trunkAllowed as number[]).includes(v));
     }
+    case 'acl-exists': {
+      const acl = state.acls[check.name];
+      return Boolean(acl) && (check.kind === undefined || acl.kind === check.kind);
+    }
+    case 'acl-entry': {
+      const acl = state.acls[check.name];
+      if (!acl) return false;
+      const rules = acl.entries.filter((e) => e.action !== 'remark');
+      if (check.position !== undefined) {
+        const e = rules[check.position - 1];
+        return Boolean(e) && entryMatchesCheck(e, check);
+      }
+      return rules.some((e) => entryMatchesCheck(e, check));
+    }
+    case 'acl-applied': {
+      const name = normalizeInterfaceName(check.interface);
+      const i = name ? state.interfaces[name] : undefined;
+      const applied = check.direction === 'in' ? i?.aclIn : i?.aclOut;
+      return Boolean(applied) && (check.name === undefined || applied === check.name);
+    }
+    case 'acl-not-applied': {
+      const name = normalizeInterfaceName(check.interface);
+      const i = name ? state.interfaces[name] : undefined;
+      return Boolean(i) && !(check.direction === 'in' ? i!.aclIn : i!.aclOut);
+    }
+    case 'access-class':
+      return Boolean(state.lines.vty.accessClass) && (check.name === undefined || state.lines.vty.accessClass === check.name);
+    case 'dhcp-pool': {
+      const p = state.dhcpPools[check.name];
+      if (!p) return false;
+      if (check.network !== undefined && p.network !== check.network) return false;
+      if (check.mask !== undefined && p.mask !== check.mask) return false;
+      if (check.defaultRouter !== undefined && p.defaultRouter !== check.defaultRouter) return false;
+      if (check.dnsServer !== undefined && p.dnsServer !== check.dnsServer) return false;
+      return true;
+    }
+    case 'dhcp-excluded': {
+      const to = check.to ?? check.from;
+      return state.dhcpExcluded.some((r) => r.from === check.from && r.to === to);
+    }
+    case 'dhcp-bindings':
+      return state.dhcpBindings.length >= check.min;
+    case 'helper-address': {
+      const name = normalizeInterfaceName(check.interface);
+      const i = name ? state.interfaces[name] : undefined;
+      return i?.helperAddress === check.address;
+    }
   }
+}
+
+function sameSubnetText(ip: string, network: string, mask: string): boolean {
+  const toInt = (s: string) => s.split('.').reduce((n, o) => ((n << 8) | Number(o)) >>> 0, 0);
+  return ((toInt(ip) & toInt(mask)) >>> 0) === ((toInt(network) & toInt(mask)) >>> 0);
 }
 
 export function grade(objectives: Objective[], net: NetworkState): GradeResult {

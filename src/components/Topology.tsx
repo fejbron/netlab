@@ -23,7 +23,7 @@ function layout(network: NetworkState, width: number): NodeBox[] {
     rows[row].push({ id: d.id, title: d.hostname, subtitle: d.deviceType.toUpperCase(), detail: '', kind: d.deviceType, x: 0, y: 0 });
   }
   for (const h of Object.values(network.hosts)) {
-    rows[2].push({ id: h.id, title: h.name, subtitle: h.deviceKind.toUpperCase(), detail: h.ip ?? '', kind: 'host', x: 0, y: 0 });
+    rows[2].push({ id: h.id, title: h.name, subtitle: h.deviceKind.toUpperCase(), detail: h.ip ?? (h.dhcp ? 'DHCP' : ''), kind: 'host', x: 0, y: 0 });
   }
   const present = rows.filter((r) => r.length > 0);
   const rowHeight = 90;
@@ -195,6 +195,18 @@ export default function Topology({ network, active, onSelect }: Props) {
             <dd className="text-fg-bright">{host.mask ?? '—'}</dd>
             <dt className="text-muted">Gateway</dt>
             <dd className="text-fg-bright">{host.gateway ?? '—'}</dd>
+            {host.dns && (
+              <>
+                <dt className="text-muted">DNS</dt>
+                <dd className="text-fg-bright">{host.dns}</dd>
+              </>
+            )}
+            {host.dhcp && (
+              <>
+                <dt className="text-muted">DHCP</dt>
+                <dd className="text-fg-bright">{host.dhcpServer ? `leased from ${host.dhcpServer}` : 'enabled, no lease'}</dd>
+              </>
+            )}
             <dt className="text-muted">MAC</dt>
             <dd className="text-fg-bright">{host.mac}</dd>
           </dl>

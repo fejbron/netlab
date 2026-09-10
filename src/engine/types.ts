@@ -1,5 +1,46 @@
 /** CLI modes supported by the IOS-style device model. */
-export type Mode = 'user' | 'privileged' | 'config' | 'interface' | 'vlan' | 'line' | 'router';
+export type Mode = 'user' | 'privileged' | 'config' | 'interface' | 'vlan' | 'line' | 'router' | 'acl-std' | 'acl-ext' | 'dhcp';
+
+export type AclAddr = { kind: 'any' } | { kind: 'host'; ip: string } | { kind: 'wildcard'; address: string; wildcard: string };
+
+export type AclProtocol = 'ip' | 'icmp' | 'tcp' | 'udp';
+
+export interface AclEntry {
+  seq: number;
+  action: 'permit' | 'deny' | 'remark';
+  remark?: string;
+  /** Extended entries only. */
+  protocol?: AclProtocol;
+  src: AclAddr;
+  dst?: AclAddr;
+  srcPort?: number;
+  dstPort?: number;
+  icmpType?: 'echo' | 'echo-reply';
+  established?: boolean;
+  matches: number;
+}
+
+export interface Acl {
+  name: string;
+  kind: 'standard' | 'extended';
+  entries: AclEntry[];
+}
+
+export interface DhcpPool {
+  name: string;
+  network?: string;
+  mask?: string;
+  defaultRouter?: string;
+  dnsServer?: string;
+  domainName?: string;
+}
+
+export interface DhcpBinding {
+  ip: string;
+  mac: string;
+  pool: string;
+  hostId: string;
+}
 
 export type DeviceType = 'switch' | 'router';
 
@@ -56,6 +97,11 @@ export interface InterfaceState {
   ospfPriority?: number;
   /** "ip ospf <pid> area <n>" enables OSPF on the interface without a network statement. */
   ospfArea?: number;
+  /** "ip access-group <acl> in|out" on routers. */
+  aclIn?: string;
+  aclOut?: string;
+  /** "ip helper-address <server>": relay DHCP toward a server. */
+  helperAddress?: string;
 }
 
 export interface VlanState {
@@ -68,6 +114,8 @@ export interface LineState {
   /** false = no login, true = line password login, 'local' = local user database. */
   login: false | true | 'local';
   transportInput?: 'all' | 'ssh' | 'telnet' | 'none';
+  /** "access-class <acl> in" on VTY lines. */
+  accessClass?: string;
 }
 
 export interface UserAccount {
@@ -97,6 +145,8 @@ export type CliErrorKind = 'invalid' | 'incomplete' | 'ambiguous';
 export interface PingRecord {
   target: string;
   success: boolean;
+  /** An access list on the way out rejected the packet (ICMP unreachable). */
+  denied?: boolean;
 }
 
 export interface DeviceState {
@@ -110,6 +160,8 @@ export interface DeviceState {
   currentInterfaces?: string[];
   currentVlan?: number;
   currentLine?: 'con' | 'vty';
+  currentAcl?: string;
+  currentPool?: string;
   pendingInput?: PendingInput;
 
   vlans: Record<number, VlanState>;
@@ -124,6 +176,10 @@ export interface DeviceState {
   ipRouting: boolean;
   staticRoutes: StaticRoute[];
   ospf?: OspfConfig;
+  acls: Record<string, Acl>;
+  dhcpPools: Record<string, DhcpPool>;
+  dhcpExcluded: Array<{ from: string; to: string }>;
+  dhcpBindings: DhcpBinding[];
 
   enablePassword?: string;
   enableSecret?: string;
