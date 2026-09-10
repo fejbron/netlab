@@ -1,6 +1,6 @@
 # NetLab
 
-[![CI](https://github.com/edbron/netlab/actions/workflows/ci.yml/badge.svg)](https://github.com/edbron/netlab/actions/workflows/ci.yml)
+[![CI](https://github.com/fejbron/netlab/actions/workflows/ci.yml/badge.svg)](https://github.com/fejbron/netlab/actions/workflows/ci.yml)
 
 Open-source network CLI labs that run entirely in your browser. Practise Cisco IOS switch configuration in a simulated terminal, get graded live against lab objectives, and track progress on your device. No installs, no accounts, no payments.
 
