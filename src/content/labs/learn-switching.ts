@@ -200,4 +200,179 @@ export const learnSwitchingLabs: Lab[] = [
       { id: 'ping', label: 'Ping the admin PC', checks: [{ type: 'ping', target: '192.168.1.10', success: true, label: 'ping 192.168.1.10 succeeds' }] },
     ],
   },
+  {
+    id: 'sw-07-who-is-plugged-in',
+    moduleId: MODULE,
+    order: 7,
+    title: 'Who Is Plugged In',
+    difficulty: 'Beginner',
+    estimatedMinutes: 6,
+    description: 'Use the MAC address table to find which port a device is on, then label that port.',
+    scenario:
+      'The office manager bought a network printer and plugged it in somewhere in the closet. Its label says MAC address 0011.22aa.0003.\n\nUse the MAC address table to find the port the printer is on, confirm the port is up, and give that port the description Printer so the next person does not have to hunt for it.',
+    concepts: ['show mac address-table', 'MAC learning', 'show interfaces status', 'Descriptions'],
+    hints: [
+      'show mac address-table lists every learned MAC with the port it was learned on.',
+      'show interfaces status confirms the port is connected.',
+      'interface g0/3, description Printer.',
+    ],
+    createState: () =>
+      createSwitch({
+        hostname: 'Access-SW1',
+        ports: 6,
+        neighbors: [
+          { port: 'g0/1', name: 'Sales-PC', ip: '192.168.10.11', mask: '255.255.255.0' },
+          { port: 'g0/2', name: 'HR-PC', ip: '192.168.10.12', mask: '255.255.255.0' },
+          { port: 'g0/3', name: 'Printer', ip: '192.168.10.50', mask: '255.255.255.0', kind: 'server' },
+          { port: 'g0/6', name: 'Core-SW', kind: 'switch' },
+        ],
+        interfaces: { 'g0/1': { description: 'Sales laptop' }, 'g0/2': { description: 'HR workstation' }, 'g0/6': { mode: 'trunk', description: 'Uplink to Core-SW' } },
+      }),
+    objectives: [
+      { id: 'mac', label: 'Read the MAC address table', checks: [{ type: 'command', pattern: '^(do )?show mac address-table$' }] },
+      { id: 'status', label: 'Confirm the port is connected', checks: [{ type: 'command', pattern: '^(do )?show interfaces status$' }] },
+      { id: 'desc', label: 'Describe the printer port', checks: [{ type: 'interface', name: 'g0/3', description: 'Printer', label: 'g0/3 description is Printer' }] },
+    ],
+  },
+  {
+    id: 'sw-08-native-vlan-mismatch',
+    moduleId: MODULE,
+    order: 8,
+    title: 'Troubleshoot: Native VLAN Mismatch',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 7,
+    description: 'The core switch logs a native VLAN mismatch on the uplink. Align this side of the trunk with the design.',
+    scenario:
+      'The core switch keeps logging %CDP-4-NATIVE_VLAN_MISMATCH on the link to this access switch. The network design says every trunk uses VLAN 99, named NATIVE, as its native VLAN. The core side is already correct.\n\nInspect the trunk on g0/6, create the missing VLAN, and set the native VLAN so both ends agree.',
+    concepts: ['Native VLAN', 'Untagged frames', 'show interfaces trunk', 'switchport trunk native vlan'],
+    hints: [
+      'show interfaces trunk shows the native VLAN for Gi0/6. It is still 1.',
+      'Create the VLAN first: vlan 99, name NATIVE.',
+      'interface g0/6, switchport trunk native vlan 99.',
+    ],
+    createState: () => {
+      const s = department();
+      s.vlans[10] = { id: 10, name: 'SALES' };
+      s.vlans[20] = { id: 20, name: 'HR' };
+      s.interfaces['GigabitEthernet0/1'].mode = 'access';
+      s.interfaces['GigabitEthernet0/1'].accessVlan = 10;
+      s.interfaces['GigabitEthernet0/2'].mode = 'access';
+      s.interfaces['GigabitEthernet0/2'].accessVlan = 20;
+      s.interfaces['GigabitEthernet0/6'].mode = 'trunk';
+      return s;
+    },
+    objectives: [
+      { id: 'inspect', label: 'Inspect the trunk first', checks: [{ type: 'command', pattern: '^(do )?show interfaces trunk$' }] },
+      { id: 'vlan', label: 'Create VLAN 99 named NATIVE', checks: [{ type: 'vlan-exists', id: 99, name: 'NATIVE' }] },
+      { id: 'native', label: 'Set the native VLAN on the trunk to 99', checks: [{ type: 'interface', name: 'g0/6', mode: 'trunk', nativeVlan: 99, label: 'Gi0/6 is a trunk with native VLAN 99' }] },
+    ],
+  },
+  {
+    id: 'sw-09-management-vlan',
+    moduleId: MODULE,
+    order: 9,
+    title: 'Management VLAN',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 8,
+    description: 'Put the switch management address in a dedicated VLAN and prove it can reach the management PC.',
+    scenario:
+      'Security policy says switches must not be managed from the user VLANs. VLAN 99 (MGMT) already exists and the management PC on g0/5 is in it at 10.0.99.10.\n\nCreate interface Vlan99 with 10.0.99.2/24, make sure it is up, set the default gateway to 10.0.99.1, then ping the management PC.',
+    concepts: ['Management VLAN', 'SVI', 'ip default-gateway', 'ping'],
+    hints: [
+      'interface vlan 99 creates the SVI. Then ip address 10.0.99.2 255.255.255.0.',
+      'New SVIs come up automatically, but no shutdown never hurts.',
+      'ip default-gateway 10.0.99.1 is a global configuration command.',
+      'ping 10.0.99.10 from privileged mode.',
+    ],
+    createState: () =>
+      createSwitch({
+        hostname: 'Access-SW1',
+        ports: 6,
+        vlans: [{ id: 10, name: 'SALES' }, { id: 99, name: 'MGMT' }],
+        neighbors: [
+          { port: 'g0/1', name: 'Sales-PC', ip: '192.168.10.11', mask: '255.255.255.0' },
+          { port: 'g0/5', name: 'Mgmt-PC', ip: '10.0.99.10', mask: '255.255.255.0' },
+          { port: 'g0/6', name: 'Core-SW', kind: 'switch' },
+        ],
+        interfaces: {
+          'g0/1': { mode: 'access', accessVlan: 10, description: 'Sales laptop' },
+          'g0/5': { mode: 'access', accessVlan: 99, description: 'Management PC' },
+          'g0/6': { mode: 'trunk', description: 'Uplink to Core-SW' },
+        },
+      }),
+    objectives: [
+      { id: 'svi', label: 'Address interface Vlan99', checks: [{ type: 'interface', name: 'vlan99', ipAddress: '10.0.99.2', subnetMask: '255.255.255.0', label: 'Vlan99 has 10.0.99.2 255.255.255.0' }] },
+      { id: 'up', label: 'Keep Vlan99 up', checks: [{ type: 'interface', name: 'vlan99', shutdown: false, label: 'Vlan99 is not shut down' }] },
+      { id: 'gw', label: 'Set the default gateway', checks: [{ type: 'default-gateway', equals: '10.0.99.1' }] },
+      { id: 'ping', label: 'Ping the management PC', checks: [{ type: 'ping', target: '10.0.99.10', success: true, label: 'ping 10.0.99.10 succeeds' }] },
+    ],
+  },
+  {
+    id: 'sw-10-trunk-cleanup',
+    moduleId: MODULE,
+    order: 10,
+    title: 'Trunk Cleanup',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 6,
+    description: 'Two departments moved out. Remove their VLANs from the trunk and from the VLAN database.',
+    scenario:
+      'VLANs 30 (MARKETING) and 40 (LEGAL) belonged to teams that moved to another building. Their VLANs are still allowed on the uplink trunk and still exist on this switch.\n\nRemove both VLANs from the allowed list on g0/6 without disturbing VLANs 10 and 20, delete them from the VLAN database, and verify the trunk.',
+    concepts: ['switchport trunk allowed vlan remove', 'no vlan', 'Change without disruption'],
+    hints: [
+      'show interfaces trunk shows the current allowed list: 10,20,30,40.',
+      'interface g0/6, switchport trunk allowed vlan remove 30,40 keeps 10 and 20 untouched.',
+      'Back in global config: no vlan 30, no vlan 40.',
+    ],
+    createState: () => {
+      const s = department();
+      s.vlans[10] = { id: 10, name: 'SALES' };
+      s.vlans[20] = { id: 20, name: 'HR' };
+      s.vlans[30] = { id: 30, name: 'MARKETING' };
+      s.vlans[40] = { id: 40, name: 'LEGAL' };
+      s.interfaces['GigabitEthernet0/1'].mode = 'access';
+      s.interfaces['GigabitEthernet0/1'].accessVlan = 10;
+      s.interfaces['GigabitEthernet0/2'].mode = 'access';
+      s.interfaces['GigabitEthernet0/2'].accessVlan = 20;
+      s.interfaces['GigabitEthernet0/6'].mode = 'trunk';
+      s.interfaces['GigabitEthernet0/6'].trunkAllowed = [10, 20, 30, 40];
+      return s;
+    },
+    objectives: [
+      { id: 'trunk', label: 'Allow only VLANs 10 and 20 on the trunk', checks: [{ type: 'interface', name: 'g0/6', mode: 'trunk', trunkAllowed: [10, 20], label: 'Gi0/6 allows exactly 10,20' }] },
+      { id: 'delete', label: 'Delete VLANs 30 and 40', checks: [{ type: 'vlan-absent', id: 30 }, { type: 'vlan-absent', id: 40 }] },
+      { id: 'keep', label: 'Keep VLANs 10 and 20', checks: [{ type: 'vlan-exists', id: 10, name: 'SALES' }, { type: 'vlan-exists', id: 20, name: 'HR' }] },
+      { id: 'verify', label: 'Verify with show interfaces trunk', checks: [{ type: 'command', pattern: '^(do )?show interfaces trunk$' }] },
+    ],
+  },
+  {
+    id: 'sw-11-exam-department-switch',
+    moduleId: MODULE,
+    order: 11,
+    title: 'Exam: Department Switch Build',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 15,
+    isExam: true,
+    description: 'Build a complete access switch from factory default: VLANs, access ports, a trunk, a management SVI, and save.',
+    scenario:
+      'A new access switch arrives for the Sales and HR floor. Build it from the design sheet:\n\n- Hostname Dept-SW1\n- VLAN 10 SALES, VLAN 20 HR, VLAN 99 MGMT\n- g0/1 static access in VLAN 10, g0/2 static access in VLAN 20\n- g0/8 trunk to the core carrying only VLANs 10, 20 and 99, native VLAN 99\n- Interface Vlan99 with 10.0.99.5/24, up, default gateway 10.0.99.1\n- Save the configuration\n\nNo hints are available.',
+    concepts: ['Synthesis', 'VLANs', 'Trunking', 'Management SVI'],
+    hints: [],
+    createState: () =>
+      createSwitch({
+        ports: 8,
+        neighbors: [
+          { port: 'g0/1', name: 'Sales-PC', ip: '192.168.10.11', mask: '255.255.255.0' },
+          { port: 'g0/2', name: 'HR-PC', ip: '192.168.20.11', mask: '255.255.255.0' },
+          { port: 'g0/8', name: 'Core-SW', kind: 'switch' },
+        ],
+      }),
+    objectives: [
+      { id: 'hostname', label: 'Set the hostname', checks: [{ type: 'hostname', equals: 'Dept-SW1' }] },
+      { id: 'vlans', label: 'Create the three VLANs', checks: [{ type: 'vlan-exists', id: 10, name: 'SALES' }, { type: 'vlan-exists', id: 20, name: 'HR' }, { type: 'vlan-exists', id: 99, name: 'MGMT' }] },
+      { id: 'access', label: 'Configure the access ports', checks: [{ type: 'interface', name: 'g0/1', mode: 'access', accessVlan: 10, label: 'g0/1 is access in VLAN 10' }, { type: 'interface', name: 'g0/2', mode: 'access', accessVlan: 20, label: 'g0/2 is access in VLAN 20' }] },
+      { id: 'trunk', label: 'Configure the uplink trunk', checks: [{ type: 'interface', name: 'g0/8', mode: 'trunk', trunkAllowed: [10, 20, 99], nativeVlan: 99, label: 'g0/8 trunks 10,20,99 with native 99' }] },
+      { id: 'mgmt', label: 'Configure management access', checks: [{ type: 'interface', name: 'vlan99', ipAddress: '10.0.99.5', subnetMask: '255.255.255.0', shutdown: false, label: 'Vlan99 is 10.0.99.5/24 and up' }, { type: 'default-gateway', equals: '10.0.99.1' }] },
+      { id: 'save', label: 'Save the configuration', checks: [{ type: 'saved' }] },
+    ],
+  },
 ];

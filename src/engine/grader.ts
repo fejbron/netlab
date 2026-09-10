@@ -34,6 +34,7 @@ export type Check =
   | { type: 'ssh-ready'; label?: string }
   | { type: 'default-gateway'; equals: string; label?: string }
   | { type: 'saved'; label?: string }
+  | { type: 'password-encryption'; label?: string }
   | { type: 'error-seen'; error: CliErrorKind; label?: string }
   | { type: 'ping'; target: string; success?: boolean; label?: string };
 
@@ -95,6 +96,8 @@ function describe(check: Check): string {
       return `Default gateway is ${check.equals}`;
     case 'saved':
       return 'Configuration is saved';
+    case 'password-encryption':
+      return 'Password encryption service is on';
     case 'error-seen':
       return `Triggered a ${check.error} command error`;
     case 'ping':
@@ -168,6 +171,8 @@ export function evaluateCheck(check: Check, state: DeviceState): boolean {
       return state.ipDefaultGateway === check.equals;
     case 'saved':
       return state.startupConfig !== null && state.startupConfig === renderConfigBody(state).join('\n');
+    case 'password-encryption':
+      return state.servicePasswordEncryption;
     case 'error-seen':
       return state.errorsSeen.includes(check.error);
     case 'ping':

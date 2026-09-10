@@ -49,6 +49,7 @@ export const WORD_HELP: Record<string, string> = {
   username: 'Establish User Name Authentication',
   line: 'Configure a terminal line',
   interface: 'Select an interface to configure',
+  range: 'interface range command',
   vlan: 'Vlan commands',
   ip: 'Global IP configuration subcommands',
   crypto: 'Encryption module',
@@ -104,6 +105,59 @@ function currentInterface(state: DeviceState): InterfaceState {
   return state.interfaces[state.currentInterface!];
 }
 
+/** All interfaces the current interface command applies to (one, or a range). */
+function targetInterfaces(state: DeviceState): InterfaceState[] {
+  const names = state.currentInterfaces?.length ? state.currentInterfaces : [state.currentInterface!];
+  return names.map((n) => state.interfaces[n]);
+}
+
+/** Run an interface command against every targeted interface, concatenating output. */
+function forEachTarget(state: DeviceState, fn: (i: InterfaceState) => string[] | void): string[] | void {
+  const out: string[] = [];
+  for (const i of targetInterfaces(state)) {
+    const r = fn(i);
+    if (r) out.push(...r);
+  }
+  return out.length ? out : undefined;
+}
+
+/**
+ * Parse an "interface range" spec such as "g0/3 - 7", "g0/3-7", "gi0/3 - gi0/7" or "g0/1 , g0/3".
+ * Returns canonical names, or null when any part is invalid or unknown.
+ */
+export function parseInterfaceRange(state: DeviceState, spec: string): string[] | null {
+  const names: string[] = [];
+  for (const part of spec.split(',')) {
+    const m = part.trim().match(/^(\S+?)\s*-\s*(\S+)$/);
+    if (!m) {
+      const single = normalizeInterfaceName(part);
+      if (!single || !state.interfaces[single]) return null;
+      names.push(single);
+      continue;
+    }
+    const start = normalizeInterfaceName(m[1]);
+    if (!start) return null;
+    const startMatch = start.match(/^(.*?)(\d+)$/);
+    if (!startMatch) return null;
+    const [, prefix, from] = startMatch;
+    let to: number;
+    if (/^\d+$/.test(m[2])) to = Number(m[2]);
+    else {
+      const end = normalizeInterfaceName(m[2]);
+      const endMatch = end?.match(/^(.*?)(\d+)$/);
+      if (!end || !endMatch || endMatch[1] !== prefix) return null;
+      to = Number(endMatch[2]);
+    }
+    if (to < Number(from)) return null;
+    for (let n = Number(from); n <= to; n++) {
+      const name = `${prefix}${n}`;
+      if (!state.interfaces[name]) return null;
+      names.push(name);
+    }
+  }
+  return names.length ? [...new Set(names)] : null;
+}
+
 function ensureVlan(state: DeviceState, id: number) {
   if (!state.vlans[id]) state.vlans[id] = { id, name: defaultVlanName(id) };
 }
@@ -133,6 +187,17 @@ function enterInterface(state: DeviceState, text: string): string[] | void {
   }
   state.mode = 'interface';
   state.currentInterface = name;
+  state.currentInterfaces = undefined;
+  state.currentVlan = undefined;
+  state.currentLine = undefined;
+}
+
+function enterInterfaceRange(state: DeviceState, spec: string): string[] | void {
+  const names = parseInterfaceRange(state, spec);
+  if (!names) return [INVALID_INPUT];
+  state.mode = 'interface';
+  state.currentInterface = names[0];
+  state.currentInterfaces = names;
   state.currentVlan = undefined;
   state.currentLine = undefined;
 }
@@ -145,6 +210,7 @@ function enterVlan(state: DeviceState, text: string): string[] | void {
   state.mode = 'vlan';
   state.currentVlan = id;
   state.currentInterface = undefined;
+  state.currentInterfaces = undefined;
   state.currentLine = undefined;
 }
 
@@ -152,6 +218,7 @@ function enterLine(state: DeviceState, line: 'con' | 'vty') {
   state.mode = 'line';
   state.currentLine = line;
   state.currentInterface = undefined;
+  state.currentInterfaces = undefined;
   state.currentVlan = undefined;
 }
 
@@ -275,12 +342,14 @@ const EXIT_CONFIG: Def[] = [
 function leaveConfig(state: DeviceState) {
   state.mode = 'privileged';
   state.currentInterface = undefined;
+  state.currentInterfaces = undefined;
   state.currentVlan = undefined;
   state.currentLine = undefined;
 }
 
 /** Commands that IOS lets you type from any config submode (it silently changes context). */
 const GLOBAL_JUMPS: Def[] = [
+  { pattern: 'interface range <spec...>', help: 'Select a range of interfaces to configure', run: ({ state }, a) => enterInterfaceRange(state, a.spec) },
   { pattern: 'interface <interface...>', help: 'Select an interface to configure', run: ({ state }, a) => enterInterface(state, a.interface.replace(/\s+/g, '')) },
   { pattern: 'vlan <id>', help: 'Vlan commands', run: ({ state }, a) => enterVlan(state, a.id) },
   {
@@ -353,10 +422,10 @@ function generateRsa(state: DeviceState, bits: number): string[] {
 }
 
 export const INTERFACE_CONFIG: Def[] = [
-  { pattern: 'description <text...>', help: 'Interface specific description', run: ({ state }, a) => void (currentInterface(state).description = a.text) },
-  { pattern: 'no description', help: 'Remove the description', run: ({ state }) => void (currentInterface(state).description = undefined) },
-  { pattern: 'shutdown', help: 'Shutdown the selected interface', run: ({ state }) => { const i = currentInterface(state); if (i.shutdown) return; i.shutdown = true; return linkChange(i, false); } },
-  { pattern: 'no shutdown', help: 'Bring the interface up', run: ({ state }) => { const i = currentInterface(state); if (!i.shutdown) return; i.shutdown = false; return i.connected || isSvi(i.name) ? linkChange(i, true) : undefined; } },
+  { pattern: 'description <text...>', help: 'Interface specific description', run: ({ state }, a) => forEachTarget(state, (i) => void (i.description = a.text)) },
+  { pattern: 'no description', help: 'Remove the description', run: ({ state }) => forEachTarget(state, (i) => void (i.description = undefined)) },
+  { pattern: 'shutdown', help: 'Shutdown the selected interface', run: ({ state }) => forEachTarget(state, (i) => { if (i.shutdown) return; i.shutdown = true; return linkChange(i, false); }) },
+  { pattern: 'no shutdown', help: 'Bring the interface up', run: ({ state }) => forEachTarget(state, (i) => { if (!i.shutdown) return; i.shutdown = false; return i.connected || isSvi(i.name) ? linkChange(i, true) : undefined; }) },
   { pattern: 'switchport', help: 'Set switching mode characteristics', run: () => undefined },
   { pattern: 'switchport mode access', help: 'Set trunking mode to ACCESS unconditionally', run: ({ state }) => l2(state, (i) => void (i.mode = 'access')) },
   { pattern: 'switchport mode trunk', help: 'Set trunking mode to TRUNK unconditionally', run: ({ state }) => l2(state, (i) => void (i.mode = 'trunk')) },
@@ -375,17 +444,17 @@ export const INTERFACE_CONFIG: Def[] = [
   { pattern: 'no switchport trunk native vlan', help: 'Reset native VLAN to default', run: ({ state }) => l2(state, (i) => void (i.nativeVlan = 1)) },
   { pattern: 'speed <speed>', help: 'Configure speed operation.', run: () => undefined },
   { pattern: 'duplex <duplex>', help: 'Configure duplex operation.', run: () => undefined },
-  { pattern: 'ip address <address> <mask>', help: 'Set the IP address of an interface', run: ({ state }, a) => { const i = currentInterface(state); if (!isSvi(i.name)) return ['% IP addresses may not be configured on L2 links.']; if (!isValidIp(a.address) || !isValidMask(a.mask)) return ['% Invalid address/mask']; i.ipAddress = a.address; i.subnetMask = a.mask; } },
-  { pattern: 'no ip address', help: 'Remove the IP address', run: ({ state }) => { const i = currentInterface(state); i.ipAddress = undefined; i.subnetMask = undefined; } },
-  { pattern: 'exit', help: 'Exit from interface configuration mode', run: ({ state }) => { state.mode = 'config'; state.currentInterface = undefined; } },
+  { pattern: 'ip address <address> <mask>', help: 'Set the IP address of an interface', run: ({ state }, a) => { if (state.currentInterfaces && state.currentInterfaces.length > 1) return [INVALID_INPUT]; const i = currentInterface(state); if (!isSvi(i.name)) return ['% IP addresses may not be configured on L2 links.']; if (!isValidIp(a.address) || !isValidMask(a.mask)) return ['% Invalid address/mask']; i.ipAddress = a.address; i.subnetMask = a.mask; } },
+  { pattern: 'no ip address', help: 'Remove the IP address', run: ({ state }) => forEachTarget(state, (i) => { i.ipAddress = undefined; i.subnetMask = undefined; }) },
+  { pattern: 'exit', help: 'Exit from interface configuration mode', run: ({ state }) => { state.mode = 'config'; state.currentInterface = undefined; state.currentInterfaces = undefined; } },
   ...EXIT_CONFIG,
   ...GLOBAL_JUMPS,
 ];
 
+/** Layer 2 commands: rejected on SVIs, applied to every interface in a range. */
 function l2(state: DeviceState, fn: (i: InterfaceState) => string[] | void): string[] | void {
-  const i = currentInterface(state);
-  if (isSvi(i.name)) return [INVALID_INPUT];
-  return fn(i);
+  if (targetInterfaces(state).some((i) => isSvi(i.name))) return [INVALID_INPUT];
+  return forEachTarget(state, fn);
 }
 
 export const VLAN_CONFIG: Def[] = [

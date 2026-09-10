@@ -14,7 +14,7 @@ export function prompt(state: DeviceState): string {
     case 'config':
       return `${h}(config)#`;
     case 'interface':
-      return `${h}(config-if)#`;
+      return state.currentInterfaces && state.currentInterfaces.length > 1 ? `${h}(config-if-range)#` : `${h}(config-if)#`;
     case 'vlan':
       return `${h}(config-vlan)#`;
     case 'line':

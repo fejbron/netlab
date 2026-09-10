@@ -65,6 +65,8 @@ export interface DeviceState {
   hostname: string;
   mode: Mode;
   currentInterface?: string;
+  /** Set by "interface range"; every interface command applies to all of them. */
+  currentInterfaces?: string[];
   currentVlan?: number;
   currentLine?: 'con' | 'vty';
   pendingInput?: PendingInput;

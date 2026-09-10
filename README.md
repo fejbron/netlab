@@ -2,12 +2,12 @@
 
 Open-source network CLI labs that run entirely in your browser. Practise Cisco IOS switch configuration in a simulated terminal, get graded live against lab objectives, and track progress on your device. No installs, no accounts, no payments.
 
-> Status: early MVP. One vendor (Cisco IOS switch), 15 labs across two modules, a faithful command resolver, and a live grader. See the roadmap below.
+> Status: early MVP. One vendor (Cisco IOS switch), 27 labs across three modules (Meet the CLI, Learn Switching, Secure the Switch), a faithful command resolver, and a live grader. See the roadmap below.
 
 ## Features
 
 - **Realistic IOS CLI**: mode hierarchy (`>`, `#`, `(config)#`, `(config-if)#`, `(config-vlan)#`, `(config-line)#`), prefix abbreviation (`conf t`, `sh run`), Tab completion, `?` context help, `do` from config mode, and the authentic error messages (`% Invalid input detected at '^' marker.`, `% Incomplete command.`, `% Ambiguous command`).
-- **Stateful switch model**: hostname, banner, enable secret, local users, console/VTY lines, VLAN database, access and trunk ports, SVIs, default gateway, SSH keys, running vs startup config, and `show` output that matches real formatting.
+- **Stateful switch model**: hostname, banner, enable secret, local users, console/VTY lines, VLAN database, access and trunk ports, `interface range`, SVIs, default gateway, SSH keys, password encryption, running vs startup config, and `show` output that matches real formatting.
 - **Labs with live grading**: objectives are declarative checks on the device state and the command history. The sidebar ticks off objectives as you type.
 - **Progress and sessions on device**: everything is stored in `localStorage`. Nothing leaves your browser.
 
@@ -67,7 +67,7 @@ A lab is a plain object. The starting device comes from `createSwitch()`, and ob
 }
 ```
 
-Available check types: `command` (regex over the expanded command history), `mode`, `hostname`, `vlan-exists`, `vlan-absent`, `interface`, `enable-secret`, `enable-password`, `line`, `user`, `banner`, `domain-name`, `ssh-ready`, `default-gateway`, `saved`, `error-seen`, `ping`. See `src/engine/grader.ts`.
+Available check types: `command` (regex over the expanded command history), `mode`, `hostname`, `vlan-exists`, `vlan-absent`, `interface`, `enable-secret`, `enable-password`, `line`, `user`, `banner`, `domain-name`, `ssh-ready`, `default-gateway`, `saved`, `password-encryption`, `error-seen`, `ping`. See `src/engine/grader.ts`.
 
 Add the lab to a module file in `src/content/labs/` and add a reference solution to `src/engine/grader.test.ts` so it stays green.
 

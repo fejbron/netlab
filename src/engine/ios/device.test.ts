@@ -178,6 +178,28 @@ describe('configuration', () => {
     expect(status.find((l) => l.startsWith('Gi0/4'))).toMatch(/disabled/);
   });
 
+  it('configures a range of interfaces at once', () => {
+    const s = session(createSwitch({ ports: 8 }));
+    s.run('en', 'conf t', 'interface range g0/3 - 7');
+    expect(prompt(s.state)).toBe('Switch(config-if-range)#');
+    s.run('switchport mode access', 'switchport access vlan 999', 'shutdown', 'description Parked');
+    for (const n of [3, 4, 5, 6, 7]) {
+      expect(s.state.interfaces[`GigabitEthernet0/${n}`]).toMatchObject({ mode: 'access', accessVlan: 999, shutdown: true, description: 'Parked' });
+    }
+    expect(s.state.interfaces['GigabitEthernet0/2']).toMatchObject({ mode: 'dynamic', accessVlan: 1, shutdown: false });
+    expect(s.state.interfaces['GigabitEthernet0/8']).toMatchObject({ mode: 'dynamic', shutdown: false });
+    expect(s.run('ip address 10.0.0.1 255.255.255.0')[0]).toBe("% Invalid input detected at '^' marker.");
+    // Other spellings and a comma list.
+    s.run('interface range gi0/1 - gi0/2 , g0/8', 'shutdown');
+    expect(prompt(s.state)).toBe('Switch(config-if-range)#');
+    expect(s.state.interfaces['GigabitEthernet0/1'].shutdown).toBe(true);
+    expect(s.state.interfaces['GigabitEthernet0/8'].shutdown).toBe(true);
+    // Leaving the range and entering a single interface restores the normal prompt.
+    s.run('int g0/1');
+    expect(prompt(s.state)).toBe('Switch(config-if)#');
+    expect(s.run('interface range g0/3 - 99')[0]).toBe("% Invalid input detected at '^' marker.");
+  });
+
   it('secures lines and local users', () => {
     const s = session(office());
     s.run('en', 'conf t', 'line con 0', 'password conpass', 'login', 'line vty 0 4', 'login local', 'transport input ssh', 'exit', 'username admin privilege 15 secret Adm1n', 'end');
