@@ -1,6 +1,17 @@
 /** CLI modes supported by the IOS-style device model. */
 export type Mode = 'user' | 'privileged' | 'config' | 'interface' | 'vlan' | 'line';
 
+export type DeviceType = 'switch' | 'router';
+
+export interface StaticRoute {
+  destination: string;
+  mask: string;
+  /** Exactly one of nextHop / exitInterface is set. */
+  nextHop?: string;
+  exitInterface?: string;
+  adminDistance: number;
+}
+
 /** 'dynamic' is the IOS default (dynamic auto); it behaves as an access port here. */
 export type PortMode = 'dynamic' | 'access' | 'trunk';
 
@@ -18,6 +29,8 @@ export interface InterfaceState {
   nativeVlan: number;
   ipAddress?: string;
   subnetMask?: string;
+  /** Router subinterfaces: "encapsulation dot1Q <vlan> [native]". */
+  encapsulation?: { vlan: number; native: boolean };
 }
 
 export interface VlanState {
@@ -62,6 +75,9 @@ export interface PingRecord {
 }
 
 export interface DeviceState {
+  /** Node id inside a NetworkState (defaults to the hostname at creation). */
+  id: string;
+  deviceType: DeviceType;
   hostname: string;
   mode: Mode;
   currentInterface?: string;
@@ -73,7 +89,15 @@ export interface DeviceState {
 
   vlans: Record<number, VlanState>;
   interfaces: Record<string, InterfaceState>;
+  /**
+   * Legacy single-device topology: hosts cabled to this switch. Converted into a
+   * NetworkState by fromSwitch(). Multi-device labs use NetworkState links instead.
+   */
   neighbors: Neighbor[];
+
+  /** Routers forward between interfaces; switches never do. */
+  ipRouting: boolean;
+  staticRoutes: StaticRoute[];
 
   enablePassword?: string;
   enableSecret?: string;

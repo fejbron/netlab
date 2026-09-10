@@ -38,9 +38,9 @@ export function sviVlanId(full: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
-/** Sort interfaces the way IOS lists them: physical first (by slot/port), SVIs last. */
+/** Sort interfaces the way IOS lists them: physical ports first (by slot/port), then loopbacks, SVIs last. */
 export function compareInterfaceNames(a: string, b: string): number {
-  const rank = (n: string) => (isSvi(n) ? 1 : 0);
+  const rank = (n: string) => (isSvi(n) ? 2 : n.startsWith('Loopback') ? 1 : 0);
   if (rank(a) !== rank(b)) return rank(a) - rank(b);
   const nums = (n: string) => (n.match(/\d+/g) ?? []).map(Number);
   const na = nums(a);

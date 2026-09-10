@@ -2,13 +2,16 @@
 
 Open-source network CLI labs that run entirely in your browser. Practise Cisco IOS switch configuration in a simulated terminal, get graded live against lab objectives, and track progress on your device. No installs, no accounts, no payments.
 
-> Status: early MVP. One vendor (Cisco IOS switch), 27 labs across three modules (Meet the CLI, Learn Switching, Secure the Switch), a faithful command resolver, and a live grader. See the roadmap below.
+> Status: early MVP. Cisco IOS switches and routers, PCs with a mini terminal, 34 labs across four modules (Meet the CLI, Learn Switching, Secure the Switch, Learn Routing), a faithful command resolver, a packet-forwarding simulation, and a live grader. See the roadmap below.
 
 ## Features
 
-- **Realistic IOS CLI**: mode hierarchy (`>`, `#`, `(config)#`, `(config-if)#`, `(config-vlan)#`, `(config-line)#`), prefix abbreviation (`conf t`, `sh run`), Tab completion, `?` context help, `do` from config mode, and the authentic error messages (`% Invalid input detected at '^' marker.`, `% Incomplete command.`, `% Ambiguous command`).
+- **Realistic IOS CLI**: mode hierarchy (`>`, `#`, `(config)#`, `(config-if)#`, `(config-subif)#`, `(config-vlan)#`, `(config-line)#`), prefix abbreviation (`conf t`, `sh run`), Tab completion, `?` context help, `do` from config mode, and the authentic error messages (`% Invalid input detected at '^' marker.`, `% Incomplete command.`, `% Ambiguous command`).
 - **Stateful switch model**: hostname, banner, enable secret, local users, console/VTY lines, VLAN database, access and trunk ports, `interface range`, SVIs, default gateway, SSH keys, password encryption, running vs startup config, and `show` output that matches real formatting.
-- **Labs with live grading**: objectives are declarative checks on the device state and the command history. The sidebar ticks off objectives as you type.
+- **Router model**: routed interfaces, dot1Q subinterfaces, loopbacks, static and default routes with administrative distance, and an IOS 15 style `show ip route` with connected, local and static routes grouped by classful network.
+- **Multi-device topologies with real forwarding**: labs can hold several switches, routers and PCs. `ping` and `traceroute` walk frames through switches (access, trunk, native and allowed VLANs, router subinterface tags) and route packets hop by hop, and only succeed when the reply can get back too.
+- **PC terminal**: `ipconfig`, `ping` and `tracert` with Windows-style output, so learners test from the host like they would on the job.
+- **Labs with live grading**: objectives are declarative checks on device state, command history and ping results, scoped to any device in the topology. The sidebar ticks off objectives as you type.
 - **Progress and sessions on device**: everything is stored in `localStorage`. Nothing leaves your browser.
 
 ## Quick start
@@ -33,10 +36,12 @@ npm run build     # type-check and build to dist/
 src/
   engine/              Pure TypeScript, no React. Fully unit-tested.
     resolver.ts        Prefix-matching command resolver, help and Tab completion
-    ios/commands.ts    Command table per mode (user, privileged, config, interface, vlan, line)
-    ios/device.ts      execute(state, line) -> { state, output }; prompt(); createSwitch()
-    ios/show.ts        Renderers for show commands and the running config
-    grader.ts          Declarative checks and grade(objectives, state)
+    ios/commands.ts    Command tables per mode for switches and routers
+    ios/device.ts      executeOn(network, nodeId, line); prompt(); createSwitch(); createRouter()
+    ios/show.ts        Renderers for show commands, running config and show ip route
+    network.ts         NetworkState (devices, hosts, links), routing tables, ping/traceroute simulation
+    host.ts            PC terminal (ipconfig, ping, tracert)
+    grader.ts          Declarative checks and grade(objectives, network)
   content/
     labs/*.ts          Lab definitions (scenario, hints, initial device, objectives)
   components/, pages/  React UI (dashboard, lab page, terminal, topology)
@@ -67,14 +72,27 @@ A lab is a plain object. The starting device comes from `createSwitch()`, and ob
 }
 ```
 
-Available check types: `command` (regex over the expanded command history), `mode`, `hostname`, `vlan-exists`, `vlan-absent`, `interface`, `enable-secret`, `enable-password`, `line`, `user`, `banner`, `domain-name`, `ssh-ready`, `default-gateway`, `saved`, `password-encryption`, `error-seen`, `ping`. See `src/engine/grader.ts`.
+Multi-device labs return a network instead of a switch:
+
+```ts
+createState: () =>
+  buildNetwork({
+    primary: 'R1',
+    devices: [createRouter({ hostname: 'R1' }), createRouter({ hostname: 'R2', interfaces: { 'g0/1': { ipAddress: '10.0.0.2', subnetMask: '255.255.255.252', shutdown: false } } })],
+    hosts: [{ id: 'PC-A', ip: '192.168.1.10', mask: '255.255.255.0', gateway: '192.168.1.1' }],
+    links: [['PC-A', 'R1:g0/0'], ['R1:g0/1', 'R2:g0/1']],
+  }),
+```
+
+Every check accepts an optional `device` (a device id, or a host id for `ping`); it defaults to the network's primary device. Available check types: `command` (regex over the expanded command history), `mode`, `hostname`, `vlan-exists`, `vlan-absent`, `interface`, `enable-secret`, `enable-password`, `line`, `user`, `banner`, `domain-name`, `ssh-ready`, `default-gateway`, `saved`, `password-encryption`, `error-seen`, `ping`, `route`, `route-absent`. See `src/engine/grader.ts`.
 
 Add the lab to a module file in `src/content/labs/` and add a reference solution to `src/engine/grader.test.ts` so it stays green.
 
 ## Roadmap
 
-- [ ] Router model: routed interfaces, static routes, `show ip route`, inter-VLAN routing
-- [ ] Multi-device labs with a PC terminal (`ipconfig`, `ping`, ARP) and frame forwarding between devices
+- [x] Router model: routed interfaces, static routes, `show ip route`, inter-VLAN routing
+- [x] Multi-device labs with a PC terminal and frame forwarding between devices
+- [ ] Dynamic routing (single-area OSPF) and DHCP
 - [ ] More vendors through the adapter pattern (JunOS, Arista EOS, Aruba CX)
 - [ ] Sandbox topology editor
 - [ ] Markdown lab format and a lab authoring page

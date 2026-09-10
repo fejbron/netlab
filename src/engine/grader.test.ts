@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { labs } from '../content';
+import { labNetwork, labs } from '../content';
 import { grade } from './grader';
-import { execute, type DeviceState } from './index';
+import { executeHost, executeOn, type NetworkState } from './index';
 
-function run(state: DeviceState, ...lines: string[]): DeviceState {
-  return lines.reduce((s, l) => execute(s, l).state, state);
+/** Reference-solution lines. "R2: cmd" or "PC-A: cmd" targets another node; default is the primary device. */
+function run(net: NetworkState, ...lines: string[]): NetworkState {
+  return lines.reduce((n, raw) => {
+    const m = raw.match(/^([A-Za-z0-9-]+):\s*(.*)$/);
+    const node = m && (n.devices[m[1]] || n.hosts[m[1]]) ? m[1] : n.primary;
+    const line = m && node === m[1] ? m[2] : raw;
+    return n.hosts[node] ? executeHost(n, node, line).network : executeOn(n, node, line).network;
+  }, net);
 }
 
 describe('labs are well formed', () => {
@@ -13,13 +19,13 @@ describe('labs are well formed', () => {
     expect(ids.size).toBe(labs.length);
     for (const lab of labs) {
       expect(lab.objectives.length, lab.id).toBeGreaterThan(0);
-      expect(() => lab.createState(), lab.id).not.toThrow();
+      expect(() => labNetwork(lab), lab.id).not.toThrow();
     }
   });
 
   it('start with nothing passed', () => {
     for (const lab of labs) {
-      expect(grade(lab.objectives, lab.createState()).passed, lab.id).toBe(false);
+      expect(grade(lab.objectives, labNetwork(lab)).passed, lab.id).toBe(false);
     }
   });
 });
@@ -53,6 +59,13 @@ describe('reference solutions pass', () => {
     'sec-02-remote-access-ssh': ['en', 'conf t', 'ip domain-name lab.local', 'crypto key generate rsa modulus 2048', 'ip ssh version 2', 'username netadmin privilege 15 secret N3t-adm1n', 'line vty 0 4', 'login local', 'transport input ssh', 'end', 'show ip ssh'],
     'sec-03-park-unused-ports': ['en', 'conf t', 'vlan 999', 'name UNUSED', 'interface range g0/3 - 7', 'switchport mode access', 'switchport access vlan 999', 'shutdown', 'end', 'show interfaces status'],
     'sec-04-exam-harden-the-switch': ['en', 'conf t', 'hostname Secure-SW1', 'banner motd #Authorized access only#', 'enable secret H4rden!', 'service password-encryption', 'username admin privilege 15 secret Adm1n-Sec', 'line con 0', 'password c0nsole', 'login', 'line vty 0 4', 'login local', 'transport input ssh', 'exit', 'ip domain-name lab.local', 'crypto key generate rsa modulus 2048', 'ip ssh version 2', 'interface range g0/3 - 7', 'shutdown', 'end', 'write memory'],
+    'rt-01-meet-the-router': ['en', 'show ip interface brief', 'conf t', 'int g0/0', 'ip address 192.168.1.1 255.255.255.0', 'no shutdown', 'end', 'show ip route', 'ping 192.168.1.10'],
+    'rt-02-connect-two-routers': ['en', 'conf t', 'int g0/1', 'ip address 10.0.0.1 255.255.255.252', 'no shutdown', 'end', 'show ip route', 'ping 10.0.0.2'],
+    'rt-03-first-static-route': ['PC-A: ping 192.168.2.10', 'en', 'conf t', 'ip route 192.168.2.0 255.255.255.0 10.0.0.2', 'end', 'show ip route', 'PC-A: ping 192.168.2.10'],
+    'rt-04-missing-return-route': ['PC-A: tracert 192.168.2.10', 'en', 'show ip route', 'R2: en', 'R2: show ip route', 'R2: conf t', 'R2: ip route 192.168.1.0 255.255.255.0 10.0.0.1', 'PC-A: ping 192.168.2.10'],
+    'rt-05-default-route': ['en', 'conf t', 'int g0/1', 'ip address 203.0.113.2 255.255.255.252', 'no shutdown', 'exit', 'ip route 0.0.0.0 0.0.0.0 203.0.113.1', 'end', 'show ip route', 'PC-A: ping 8.8.8.8'],
+    'rt-06-router-on-a-stick': ['en', 'conf t', 'int g0/0', 'no shutdown', 'int g0/0.10', 'encapsulation dot1q 10', 'ip address 192.168.10.1 255.255.255.0', 'int g0/0.20', 'encapsulation dot1q 20', 'ip address 192.168.20.1 255.255.255.0', 'end', 'PC-A: ping 192.168.20.10'],
+    'rt-07-exam-branch-connectivity': ['en', 'conf t', 'int g0/0', 'ip address 192.168.1.1 255.255.255.0', 'no shut', 'int g0/1', 'ip address 10.0.0.1 255.255.255.252', 'no shut', 'exit', 'ip route 192.168.2.0 255.255.255.0 10.0.0.2', 'end', 'write memory', 'R2: en', 'R2: conf t', 'R2: int g0/0', 'R2: ip address 192.168.2.1 255.255.255.0', 'R2: no shut', 'R2: int g0/1', 'R2: ip address 10.0.0.2 255.255.255.252', 'R2: no shut', 'R2: exit', 'R2: ip route 192.168.1.0 255.255.255.0 10.0.0.1', 'R2: end', 'R2: write memory', 'PC-A: ping 192.168.2.10'],
   };
 
   it('covers every lab', () => {
@@ -61,8 +74,8 @@ describe('reference solutions pass', () => {
 
   for (const lab of labs) {
     it(lab.id, () => {
-      const state = run(lab.createState(), ...(solutions[lab.id] ?? []));
-      const result = grade(lab.objectives, state);
+      const net = run(labNetwork(lab), ...(solutions[lab.id] ?? []));
+      const result = grade(lab.objectives, net);
       const failing = result.objectives.filter((o) => !o.passed).map((o) => `${o.label}: ${o.checks.filter((c) => !c.passed).map((c) => c.label).join(', ')}`);
       expect(failing).toEqual([]);
       expect(result.passed).toBe(true);

@@ -1,7 +1,8 @@
 import { normalizeInterfaceName } from '../interfaces';
+import { fromSwitch, isSubinterface, syncLinkState, type NetworkState } from '../network';
 import { complete, help, resolve } from '../resolver';
-import type { DeviceState, ExecResult, InterfaceState, Neighbor, VlanState } from '../types';
-import { defsForMode, INVALID_INPUT, isConfigMode, PRIV_EXEC, WORD_HELP } from './commands';
+import type { DeviceState, ExecResult, InterfaceState, Neighbor, StaticRoute, VlanState } from '../types';
+import { defsForMode, INVALID_INPUT, isConfigMode, privExecFor, WORD_HELP } from './commands';
 
 export function prompt(state: DeviceState): string {
   if (state.pendingInput?.kind === 'enable-password') return 'Password: ';
@@ -14,7 +15,8 @@ export function prompt(state: DeviceState): string {
     case 'config':
       return `${h}(config)#`;
     case 'interface':
-      return state.currentInterfaces && state.currentInterfaces.length > 1 ? `${h}(config-if-range)#` : `${h}(config-if)#`;
+      if (state.currentInterfaces && state.currentInterfaces.length > 1) return `${h}(config-if-range)#`;
+      return state.currentInterface && isSubinterface(state.currentInterface) ? `${h}(config-subif)#` : `${h}(config-if)#`;
     case 'vlan':
       return `${h}(config-vlan)#`;
     case 'line':
@@ -59,19 +61,37 @@ function handlePendingInput(state: DeviceState, line: string): string[] {
   return [];
 }
 
+export interface NetworkExecResult {
+  network: NetworkState;
+  output: string[];
+}
+
 /**
- * Execute one line typed at the device. Returns the new state and the output lines.
- * The input state is never mutated.
+ * Execute one line typed at a CLI device inside a network. Returns the new network
+ * (deep-cloned; the input is never mutated) and the output lines.
  */
+export function executeOn(prev: NetworkState, nodeId: string, rawLine: string): NetworkExecResult {
+  const network = structuredClone(prev);
+  const state = network.devices[nodeId];
+  if (!state) throw new Error(`No CLI device "${nodeId}" in network`);
+  const output = run(state, network, nodeId, rawLine);
+  syncLinkState(network);
+  return { network, output };
+}
+
+/** Single-device convenience used by tests and legacy callers. */
 export function execute(prev: DeviceState, rawLine: string): ExecResult {
-  const state = structuredClone(prev);
+  const net = fromSwitch(structuredClone(prev));
+  const r = executeOn(net, net.primary, rawLine);
+  return { state: r.network.devices[net.primary], output: r.output };
+}
+
+function run(state: DeviceState, network: NetworkState, nodeId: string, rawLine: string): string[] {
   const line = rawLine.trim();
   const promptBefore = prompt(state);
 
-  if (state.pendingInput) {
-    return { state, output: handlePendingInput(state, rawLine) };
-  }
-  if (line === '') return { state, output: [] };
+  if (state.pendingInput) return handlePendingInput(state, rawLine);
+  if (line === '') return [];
 
   state.commandHistory.push(line);
 
@@ -80,30 +100,30 @@ export function execute(prev: DeviceState, rawLine: string): ExecResult {
     const body = line.slice(0, -1);
     const partial = body.length > 0 && !/\s$/.test(body);
     const tokens = body.trim() === '' ? [] : body.trim().split(/\s+/);
-    let defs = defsForMode(state.mode);
+    let defs = defsForMode(state.mode, state.deviceType);
     let scoped = tokens;
     if (isConfigMode(state.mode) && tokens[0]?.toLowerCase() === 'do' && tokens.length > 1) {
-      defs = PRIV_EXEC;
+      defs = privExecFor(state.deviceType);
       scoped = tokens.slice(1);
     }
     const entries = help(defs, scoped, partial, WORD_HELP);
     state.canonicalHistory.push('?');
-    if (entries.length === 0) return { state, output: ['% Unrecognized command'] };
+    if (entries.length === 0) return ['% Unrecognized command'];
     const width = Math.max(...entries.map((e) => e.word.length), 10) + 2;
-    return { state, output: entries.map((e) => (e.word === '<cr>' ? '  <cr>' : `  ${e.word.padEnd(width)}${e.help}`)) };
+    return entries.map((e) => (e.word === '<cr>' ? '  <cr>' : `  ${e.word.padEnd(width)}${e.help}`));
   }
 
   let tokens = line.split(/\s+/);
-  let defs = defsForMode(state.mode);
+  let defs = defsForMode(state.mode, state.deviceType);
   let canonicalPrefix = '';
 
   if (isConfigMode(state.mode) && tokens[0].toLowerCase() === 'do') {
     if (tokens.length === 1) {
       state.errorsSeen.push('incomplete');
-      return { state, output: ['% Incomplete command.', ''] };
+      return ['% Incomplete command.', ''];
     }
     tokens = tokens.slice(1);
-    defs = PRIV_EXEC;
+    defs = privExecFor(state.deviceType);
     canonicalPrefix = 'do ';
   }
 
@@ -111,24 +131,24 @@ export function execute(prev: DeviceState, rawLine: string): ExecResult {
   switch (res.kind) {
     case 'ok': {
       state.canonicalHistory.push(canonicalPrefix + res.canonical);
-      const output = res.def.run({ state }, res.args) ?? [];
+      const output = res.def.run({ state, network, nodeId }, res.args) ?? [];
       noteMode(state);
-      return { state, output: output.length ? [...output, ''] : [] };
+      return output.length ? [...output, ''] : [];
     }
     case 'ambiguous':
       state.errorsSeen.push('ambiguous');
-      return { state, output: [`% Ambiguous command:  "${line}"`, ''] };
+      return [`% Ambiguous command:  "${line}"`, ''];
     case 'incomplete':
       state.errorsSeen.push('incomplete');
-      return { state, output: ['% Incomplete command.', ''] };
+      return ['% Incomplete command.', ''];
     case 'invalid': {
       state.errorsSeen.push('invalid');
       if (!isConfigMode(state.mode) && res.index === 0 && !canonicalPrefix) {
-        return { state, output: [`Translating "${tokens[0]}"...domain server (255.255.255.255)`, '% Unknown command or computer name, or unable to find computer address', ''] };
+        return [`Translating "${tokens[0]}"...domain server (255.255.255.255)`, '% Unknown command or computer name, or unable to find computer address', ''];
       }
       const tokenIndex = res.index + (canonicalPrefix ? 1 : 0);
       const caret = ' '.repeat(promptBefore.length + tokenOffset(line, tokenIndex)) + '^';
-      return { state, output: [caret, INVALID_INPUT, ''] };
+      return [caret, INVALID_INPUT, ''];
     }
   }
 }
@@ -137,10 +157,10 @@ export function execute(prev: DeviceState, rawLine: string): ExecResult {
 export function tabComplete(state: DeviceState, line: string): string | null {
   if (state.pendingInput || /\s$/.test(line) || line.trim() === '') return null;
   let tokens = line.trim().split(/\s+/);
-  let defs = defsForMode(state.mode);
+  let defs = defsForMode(state.mode, state.deviceType);
   let prefix = '';
   if (isConfigMode(state.mode) && tokens[0].toLowerCase() === 'do' && tokens.length > 1) {
-    defs = PRIV_EXEC;
+    defs = privExecFor(state.deviceType);
     prefix = tokens[0] + ' ';
     tokens = tokens.slice(1);
   }
@@ -150,7 +170,7 @@ export function tabComplete(state: DeviceState, line: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// factory
+// factories
 
 export interface NeighborSpec {
   port: string;
@@ -161,9 +181,12 @@ export interface NeighborSpec {
 }
 
 export interface SwitchOptions {
+  /** Node id inside a network; defaults to the hostname. */
+  id?: string;
   hostname?: string;
   /** Number of GigabitEthernet0/N ports. */
   ports?: number;
+  /** Legacy single-device topology; prefer buildNetwork() for multi-device labs. */
   neighbors?: NeighborSpec[];
   vlans?: Array<{ id: number; name?: string }>;
   /** Per-interface overrides keyed by any interface spelling ("g0/1"). */
@@ -182,39 +205,17 @@ function defaultVlans(): Record<number, VlanState> {
   };
 }
 
-export function createSwitch(options: SwitchOptions = {}): DeviceState {
-  const ports = options.ports ?? 8;
-  const interfaces: Record<string, InterfaceState> = {};
-  for (let n = 1; n <= ports; n++) {
-    const name = `GigabitEthernet0/${n}`;
-    interfaces[name] = { name, shutdown: false, connected: false, mode: 'dynamic', accessVlan: 1, trunkAllowed: 'all', nativeVlan: 1 };
-  }
-  interfaces['Vlan1'] = { name: 'Vlan1', shutdown: true, connected: true, mode: 'access', accessVlan: 1, trunkAllowed: 'all', nativeVlan: 1 };
-
-  const vlans = defaultVlans();
-  for (const v of options.vlans ?? []) vlans[v.id] = { id: v.id, name: v.name ?? `VLAN${String(v.id).padStart(4, '0')}` };
-
-  const neighbors: Neighbor[] = [];
-  (options.neighbors ?? []).forEach((n, idx) => {
-    const full = normalize(n.port);
-    if (!interfaces[full]) throw new Error(`Unknown port ${n.port} in neighbor ${n.name}`);
-    interfaces[full].connected = true;
-    neighbors.push({ interface: full, name: n.name, ip: n.ip, mask: n.mask, kind: n.kind ?? 'pc', mac: `0011.22aa.${String(idx + 1).padStart(4, '0')}` });
-  });
-
-  for (const [key, patch] of Object.entries(options.interfaces ?? {})) {
-    const full = normalize(key);
-    if (!interfaces[full]) throw new Error(`Unknown interface ${key}`);
-    Object.assign(interfaces[full], patch);
-    if (patch.accessVlan && !vlans[patch.accessVlan]) vlans[patch.accessVlan] = { id: patch.accessVlan, name: `VLAN${String(patch.accessVlan).padStart(4, '0')}` };
-  }
-
+function baseDevice(id: string, hostname: string, deviceType: DeviceState['deviceType']): DeviceState {
   return {
-    hostname: options.hostname ?? 'Switch',
+    id,
+    deviceType,
+    hostname,
     mode: 'user',
-    vlans,
-    interfaces,
-    neighbors,
+    vlans: {},
+    interfaces: {},
+    neighbors: [],
+    ipRouting: deviceType === 'router',
+    staticRoutes: [],
     users: [],
     lines: { con: { login: false }, vty: { login: false } },
     servicePasswordEncryption: false,
@@ -224,7 +225,6 @@ export function createSwitch(options: SwitchOptions = {}): DeviceState {
     modesVisited: ['user'],
     errorsSeen: [],
     pings: [],
-    ...options.overrides,
   };
 }
 
@@ -232,4 +232,69 @@ function normalize(name: string): string {
   const full = normalizeInterfaceName(name);
   if (!full) throw new Error(`Bad interface name ${name}`);
   return full;
+}
+
+export function createSwitch(options: SwitchOptions = {}): DeviceState {
+  const hostname = options.hostname ?? 'Switch';
+  const dev = baseDevice(options.id ?? hostname, hostname, 'switch');
+  const ports = options.ports ?? 8;
+  for (let n = 1; n <= ports; n++) {
+    const name = `GigabitEthernet0/${n}`;
+    dev.interfaces[name] = { name, shutdown: false, connected: false, mode: 'dynamic', accessVlan: 1, trunkAllowed: 'all', nativeVlan: 1 };
+  }
+  dev.interfaces['Vlan1'] = { name: 'Vlan1', shutdown: true, connected: true, mode: 'access', accessVlan: 1, trunkAllowed: 'all', nativeVlan: 1 };
+
+  dev.vlans = defaultVlans();
+  for (const v of options.vlans ?? []) dev.vlans[v.id] = { id: v.id, name: v.name ?? `VLAN${String(v.id).padStart(4, '0')}` };
+
+  (options.neighbors ?? []).forEach((n, idx) => {
+    const full = normalize(n.port);
+    if (!dev.interfaces[full]) throw new Error(`Unknown port ${n.port} in neighbor ${n.name}`);
+    dev.interfaces[full].connected = true;
+    dev.neighbors.push({ interface: full, name: n.name, ip: n.ip, mask: n.mask, kind: n.kind ?? 'pc', mac: `0011.22aa.${String(idx + 1).padStart(4, '0')}` });
+  });
+
+  for (const [key, patch] of Object.entries(options.interfaces ?? {})) {
+    const full = normalize(key);
+    if (!dev.interfaces[full]) throw new Error(`Unknown interface ${key}`);
+    Object.assign(dev.interfaces[full], patch);
+    if (patch.accessVlan && !dev.vlans[patch.accessVlan]) dev.vlans[patch.accessVlan] = { id: patch.accessVlan, name: `VLAN${String(patch.accessVlan).padStart(4, '0')}` };
+  }
+
+  return { ...dev, ...options.overrides };
+}
+
+export interface RouterOptions {
+  id?: string;
+  hostname?: string;
+  /** Number of GigabitEthernet0/N ports, numbered from 0. */
+  ports?: number;
+  /** Per-interface overrides; subinterfaces ("g0/0.10") and loopbacks are created on demand. */
+  interfaces?: Record<string, Partial<InterfaceState>>;
+  staticRoutes?: Array<{ destination: string; mask: string; nextHop?: string; exitInterface?: string; adminDistance?: number }>;
+  overrides?: Partial<DeviceState>;
+}
+
+/** A router whose physical ports start administratively down, like a real ISR out of the box. */
+export function createRouter(options: RouterOptions = {}): DeviceState {
+  const hostname = options.hostname ?? 'Router';
+  const dev = baseDevice(options.id ?? hostname, hostname, 'router');
+  const ports = options.ports ?? 2;
+  for (let n = 0; n < ports; n++) {
+    const name = `GigabitEthernet0/${n}`;
+    dev.interfaces[name] = { name, shutdown: true, connected: false, mode: 'access', accessVlan: 1, trunkAllowed: 'all', nativeVlan: 1 };
+  }
+  for (const [key, patch] of Object.entries(options.interfaces ?? {})) {
+    const full = normalize(key);
+    if (!dev.interfaces[full]) {
+      const isSub = isSubinterface(full);
+      if (isSub && !dev.interfaces[full.split('.')[0]]) throw new Error(`Unknown parent interface for ${key}`);
+      dev.interfaces[full] = { name: full, shutdown: false, connected: false, mode: 'access', accessVlan: 1, trunkAllowed: 'all', nativeVlan: 1 };
+    }
+    Object.assign(dev.interfaces[full], patch);
+  }
+  dev.staticRoutes = (options.staticRoutes ?? []).map(
+    (r): StaticRoute => ({ destination: r.destination, mask: r.mask, nextHop: r.nextHop, exitInterface: r.exitInterface ? normalize(r.exitInterface) : undefined, adminDistance: r.adminDistance ?? 1 }),
+  );
+  return { ...dev, ...options.overrides };
 }

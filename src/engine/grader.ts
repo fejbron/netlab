@@ -1,42 +1,53 @@
 import { normalizeInterfaceName } from './interfaces';
 import { renderConfigBody } from './ios/show';
+import type { NetworkState } from './network';
 import type { CliErrorKind, DeviceState, LineState, Mode, PortMode } from './types';
+
+interface Base {
+  /** Device (or host, for ping) the check targets. Defaults to the network's primary device. */
+  device?: string;
+  label?: string;
+}
 
 /**
  * Declarative checks a lab author combines into objectives.
  * Every check has an optional `label` shown as a sub-objective in the UI.
  */
-export type Check =
-  | { type: 'command'; pattern: string; label?: string }
-  | { type: 'mode'; mode: Mode; label?: string }
-  | { type: 'hostname'; equals: string; label?: string }
-  | { type: 'vlan-exists'; id: number; name?: string; label?: string }
-  | { type: 'vlan-absent'; id: number; label?: string }
-  | {
-      type: 'interface';
-      name: string;
-      mode?: PortMode;
-      accessVlan?: number;
-      shutdown?: boolean;
-      description?: string;
-      trunkAllowed?: 'all' | number[];
-      nativeVlan?: number;
-      ipAddress?: string;
-      subnetMask?: string;
-      label?: string;
-    }
-  | { type: 'enable-secret'; equals?: string; label?: string }
-  | { type: 'enable-password'; equals?: string; label?: string }
-  | { type: 'line'; line: 'con' | 'vty'; password?: string; login?: LineState['login']; transportInput?: LineState['transportInput']; label?: string }
-  | { type: 'user'; username: string; privilege?: number; secret?: boolean; label?: string }
-  | { type: 'banner'; contains?: string; label?: string }
-  | { type: 'domain-name'; equals?: string; label?: string }
-  | { type: 'ssh-ready'; label?: string }
-  | { type: 'default-gateway'; equals: string; label?: string }
-  | { type: 'saved'; label?: string }
-  | { type: 'password-encryption'; label?: string }
-  | { type: 'error-seen'; error: CliErrorKind; label?: string }
-  | { type: 'ping'; target: string; success?: boolean; label?: string };
+export type Check = Base &
+  (
+    | { type: 'command'; pattern: string }
+    | { type: 'mode'; mode: Mode }
+    | { type: 'hostname'; equals: string }
+    | { type: 'vlan-exists'; id: number; name?: string }
+    | { type: 'vlan-absent'; id: number }
+    | {
+        type: 'interface';
+        name: string;
+        mode?: PortMode;
+        accessVlan?: number;
+        shutdown?: boolean;
+        description?: string;
+        trunkAllowed?: 'all' | number[];
+        nativeVlan?: number;
+        ipAddress?: string;
+        subnetMask?: string;
+        encapsulation?: number;
+      }
+    | { type: 'enable-secret'; equals?: string }
+    | { type: 'enable-password'; equals?: string }
+    | { type: 'line'; line: 'con' | 'vty'; password?: string; login?: LineState['login']; transportInput?: LineState['transportInput'] }
+    | { type: 'user'; username: string; privilege?: number; secret?: boolean }
+    | { type: 'banner'; contains?: string }
+    | { type: 'domain-name'; equals?: string }
+    | { type: 'ssh-ready' }
+    | { type: 'default-gateway'; equals: string }
+    | { type: 'saved' }
+    | { type: 'password-encryption' }
+    | { type: 'error-seen'; error: CliErrorKind }
+    | { type: 'ping'; target: string; success?: boolean }
+    | { type: 'route'; destination: string; mask: string; via?: string }
+    | { type: 'route-absent'; destination: string; mask: string }
+  );
 
 export interface Objective {
   id: string;
@@ -65,11 +76,12 @@ export interface GradeResult {
 
 function describe(check: Check): string {
   if (check.label) return check.label;
+  const on = check.device ? ` on ${check.device}` : '';
   switch (check.type) {
     case 'command':
-      return `Run ${check.pattern.replace(/[\^$]/g, '')}`;
+      return `Run ${check.pattern.replace(/[\^$]/g, '')}${on}`;
     case 'mode':
-      return `Reach ${check.mode} mode`;
+      return `Reach ${check.mode} mode${on}`;
     case 'hostname':
       return `Hostname is ${check.equals}`;
     case 'vlan-exists':
@@ -77,31 +89,35 @@ function describe(check: Check): string {
     case 'vlan-absent':
       return `VLAN ${check.id} is removed`;
     case 'interface':
-      return `${check.name} is configured correctly`;
+      return `${check.name}${on} is configured correctly`;
     case 'enable-secret':
-      return 'Enable secret is set';
+      return `Enable secret is set${on}`;
     case 'enable-password':
-      return 'Enable password is set';
+      return `Enable password is set${on}`;
     case 'line':
-      return `${check.line === 'con' ? 'Console' : 'VTY'} line is configured`;
+      return `${check.line === 'con' ? 'Console' : 'VTY'} line is configured${on}`;
     case 'user':
-      return `User ${check.username} exists`;
+      return `User ${check.username} exists${on}`;
     case 'banner':
-      return 'MOTD banner is set';
+      return `MOTD banner is set${on}`;
     case 'domain-name':
-      return 'Domain name is set';
+      return `Domain name is set${on}`;
     case 'ssh-ready':
-      return 'RSA keys are generated';
+      return `RSA keys are generated${on}`;
     case 'default-gateway':
       return `Default gateway is ${check.equals}`;
     case 'saved':
-      return 'Configuration is saved';
+      return `Configuration is saved${on}`;
     case 'password-encryption':
-      return 'Password encryption service is on';
+      return `Password encryption service is on${on}`;
     case 'error-seen':
       return `Triggered a ${check.error} command error`;
     case 'ping':
-      return `Ping ${check.target}`;
+      return `Ping ${check.target}${check.device ? ` from ${check.device}` : ''}`;
+    case 'route':
+      return `Route to ${check.destination} ${check.mask}${check.via ? ` via ${check.via}` : ''}${on}`;
+    case 'route-absent':
+      return `No route to ${check.destination} ${check.mask}${on}`;
   }
 }
 
@@ -113,7 +129,18 @@ function sameList(a: 'all' | number[], b: 'all' | number[]): boolean {
   return sa.every((v, i) => v === sb[i]);
 }
 
-export function evaluateCheck(check: Check, state: DeviceState): boolean {
+function deviceFor(check: Check, net: NetworkState): DeviceState | undefined {
+  return net.devices[check.device ?? net.primary];
+}
+
+export function evaluateCheck(check: Check, net: NetworkState): boolean {
+  if (check.type === 'ping') {
+    const id = check.device ?? net.primary;
+    const pings = net.devices[id]?.pings ?? net.hosts[id]?.pings ?? [];
+    return pings.some((p) => p.target === check.target && (check.success === undefined || p.success === check.success));
+  }
+  const state = deviceFor(check, net);
+  if (!state) return false;
   switch (check.type) {
     case 'command': {
       const re = new RegExp(check.pattern, 'i');
@@ -141,6 +168,7 @@ export function evaluateCheck(check: Check, state: DeviceState): boolean {
       if (check.nativeVlan !== undefined && i.nativeVlan !== check.nativeVlan) return false;
       if (check.ipAddress !== undefined && i.ipAddress !== check.ipAddress) return false;
       if (check.subnetMask !== undefined && i.subnetMask !== check.subnetMask) return false;
+      if (check.encapsulation !== undefined && i.encapsulation?.vlan !== check.encapsulation) return false;
       return true;
     }
     case 'enable-secret':
@@ -175,14 +203,18 @@ export function evaluateCheck(check: Check, state: DeviceState): boolean {
       return state.servicePasswordEncryption;
     case 'error-seen':
       return state.errorsSeen.includes(check.error);
-    case 'ping':
-      return state.pings.some((p) => p.target === check.target && (check.success === undefined || p.success === check.success));
+    case 'route': {
+      const viaIface = check.via ? normalizeInterfaceName(check.via) : null;
+      return state.staticRoutes.some((r) => r.destination === check.destination && r.mask === check.mask && (check.via === undefined || r.nextHop === check.via || (viaIface !== null && r.exitInterface === viaIface)));
+    }
+    case 'route-absent':
+      return !state.staticRoutes.some((r) => r.destination === check.destination && r.mask === check.mask);
   }
 }
 
-export function grade(objectives: Objective[], state: DeviceState): GradeResult {
+export function grade(objectives: Objective[], net: NetworkState): GradeResult {
   const results: ObjectiveResult[] = objectives.map((o) => {
-    const checks = o.checks.map((c) => ({ label: describe(c), passed: evaluateCheck(c, state) }));
+    const checks = o.checks.map((c) => ({ label: describe(c), passed: evaluateCheck(c, net) }));
     return { id: o.id, label: o.label, passed: checks.every((c) => c.passed), checks };
   });
   const passedCount = results.filter((r) => r.passed).length;

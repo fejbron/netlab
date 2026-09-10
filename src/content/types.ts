@@ -1,4 +1,4 @@
-import type { DeviceState, Objective } from '../engine';
+import type { DeviceState, NetworkState, Objective } from '../engine';
 
 export type Difficulty = 'Beginner' | 'Intermediate' | 'Advanced';
 
@@ -23,8 +23,11 @@ export interface Lab {
   concepts: string[];
   /** Progressive hints, revealed one at a time. Empty for exams. */
   hints: string[];
-  /** Builds the starting device. Called on every reset. */
-  createState: () => DeviceState;
+  /**
+   * Builds the starting topology. Called on every reset. A bare switch (with
+   * `neighbors`) is wrapped into a one-device network automatically.
+   */
+  createState: () => DeviceState | NetworkState;
   objectives: Objective[];
   isExam?: boolean;
 }

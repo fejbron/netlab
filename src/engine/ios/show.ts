@@ -1,5 +1,7 @@
 import type { DeviceState, InterfaceState } from '../types';
 import { compareInterfaceNames, isSvi, shortInterfaceName } from '../interfaces';
+import { isLoopback, isSubinterface, type MacEntry, type RouteEntry } from '../network';
+import { classfulNetwork, ipToInt } from './net';
 
 export const IOS_VERSION = '15.2(7)E8';
 
@@ -8,7 +10,7 @@ export function sortedInterfaces(state: DeviceState): InterfaceState[] {
 }
 
 export function physicalInterfaces(state: DeviceState): InterfaceState[] {
-  return sortedInterfaces(state).filter((i) => !isSvi(i.name));
+  return sortedInterfaces(state).filter((i) => !isSvi(i.name) && !isLoopback(i.name) && !isSubinterface(i.name));
 }
 
 /** Deterministic fake MD5-style hash so "enable secret 5 ..." looks right. */
@@ -60,16 +62,17 @@ export function formatVlanList(vlans: 'all' | number[]): string {
 
 /** The saveable body of the configuration, from the first "!" to "end". */
 export function renderConfigBody(state: DeviceState): string[] {
-  const out: string[] = [];
-  const pushLine = (o: string[], l: DeviceState['lines']['con']) => {
-    if (l.password) o.push(` password ${pw(state, l.password)}`);
-    if (l.login === true) o.push(' login');
-    if (l.login === 'local') o.push(' login local');
-    if (l.transportInput && l.transportInput !== 'all') o.push(` transport input ${l.transportInput}`);
-  };
-  out.push('!', 'version 15.2', 'no service pad', 'service timestamps debug datetime msec', 'service timestamps log datetime msec');
-  out.push(state.servicePasswordEncryption ? 'service password-encryption' : 'no service password-encryption');
-  out.push('!', `hostname ${state.hostname}`, '!', 'boot-start-marker', 'boot-end-marker', '!');
+  return state.deviceType === 'router' ? renderRouterConfigBody(state) : renderSwitchConfigBody(state);
+}
+
+function pushLineConfig(state: DeviceState, o: string[], l: DeviceState['lines']['con']) {
+  if (l.password) o.push(` password ${pw(state, l.password)}`);
+  if (l.login === true) o.push(' login');
+  if (l.login === 'local') o.push(' login local');
+  if (l.transportInput && l.transportInput !== 'all') o.push(` transport input ${l.transportInput}`);
+}
+
+function pushSecurityConfig(state: DeviceState, out: string[]) {
   if (state.enableSecret) out.push(`enable secret 5 ${fakeSecretHash(state.enableSecret)}`);
   if (state.enablePassword) out.push(`enable password ${pw(state, state.enablePassword)}`);
   if (state.enableSecret || state.enablePassword) out.push('!');
@@ -78,6 +81,55 @@ export function renderConfigBody(state: DeviceState): string[] {
     out.push(u.secret ? `username ${u.username}${priv} secret 5 ${fakeSecretHash(u.password)}` : `username ${u.username}${priv} password ${pw(state, u.password)}`);
   }
   if (state.users.length) out.push('!');
+}
+
+function pushTail(state: DeviceState, out: string[]) {
+  if (state.bannerMotd) out.push(`banner motd ^C${state.bannerMotd}^C`, '!');
+  out.push('line con 0');
+  pushLineConfig(state, out, state.lines.con);
+  out.push('line vty 0 4');
+  pushLineConfig(state, out, state.lines.vty);
+  out.push('line vty 5 15');
+  pushLineConfig(state, out, state.lines.vty);
+  out.push('!', 'end');
+}
+
+function renderRouterConfigBody(state: DeviceState): string[] {
+  const out: string[] = [];
+  out.push('!', 'version 15.4', 'service timestamps debug datetime msec', 'service timestamps log datetime msec');
+  out.push(state.servicePasswordEncryption ? 'service password-encryption' : 'no service password-encryption');
+  out.push('!', `hostname ${state.hostname}`, '!', 'boot-start-marker', 'boot-end-marker', '!');
+  pushSecurityConfig(state, out);
+  out.push('no aaa new-model', '!');
+  if (state.ipDomainName) out.push(`ip domain-name ${state.ipDomainName}`, '!');
+  if (state.sshVersion) out.push(`ip ssh version ${state.sshVersion}`, '!');
+  out.push('ip cef', 'no ipv6 cef', '!');
+  if (!state.ipRouting) out.push('no ip routing', '!');
+  for (const i of sortedInterfaces(state)) {
+    out.push(`interface ${i.name}`);
+    if (i.description) out.push(` description ${i.description}`);
+    if (i.encapsulation) out.push(` encapsulation dot1Q ${i.encapsulation.vlan}${i.encapsulation.native ? ' native' : ''}`);
+    out.push(i.ipAddress && i.subnetMask ? ` ip address ${i.ipAddress} ${i.subnetMask}` : ' no ip address');
+    if (i.shutdown) out.push(' shutdown');
+    if (!isSubinterface(i.name) && !isLoopback(i.name)) out.push(' duplex auto', ' speed auto');
+    out.push('!');
+  }
+  out.push('ip forward-protocol nd', '!');
+  for (const r of state.staticRoutes) {
+    const via = r.nextHop ?? r.exitInterface;
+    out.push(`ip route ${r.destination} ${r.mask} ${via}${r.adminDistance !== 1 ? ` ${r.adminDistance}` : ''}`);
+  }
+  if (state.staticRoutes.length) out.push('!');
+  pushTail(state, out);
+  return out;
+}
+
+function renderSwitchConfigBody(state: DeviceState): string[] {
+  const out: string[] = [];
+  out.push('!', 'version 15.2', 'no service pad', 'service timestamps debug datetime msec', 'service timestamps log datetime msec');
+  out.push(state.servicePasswordEncryption ? 'service password-encryption' : 'no service password-encryption');
+  out.push('!', `hostname ${state.hostname}`, '!', 'boot-start-marker', 'boot-end-marker', '!');
+  pushSecurityConfig(state, out);
   out.push('no aaa new-model', 'system mtu routing 1500', '!');
   if (state.ipDomainName) out.push(`ip domain-name ${state.ipDomainName}`, '!');
   if (state.sshVersion) out.push(`ip ssh version ${state.sshVersion}`, '!');
@@ -106,14 +158,7 @@ export function renderConfigBody(state: DeviceState): string[] {
   }
   if (state.ipDefaultGateway) out.push(`ip default-gateway ${state.ipDefaultGateway}`);
   out.push('ip http server', 'ip http secure-server', '!');
-  if (state.bannerMotd) out.push(`banner motd ^C${state.bannerMotd}^C`, '!');
-  out.push('line con 0');
-  pushLine(out, state.lines.con);
-  out.push('line vty 0 4');
-  pushLine(out, state.lines.vty);
-  out.push('line vty 5 15');
-  pushLine(out, state.lines.vty);
-  out.push('!', 'end');
+  pushTail(state, out);
   return out;
 }
 
@@ -214,21 +259,84 @@ export function showIpInterfaceBrief(state: DeviceState): string[] {
   return out;
 }
 
-export function showMacAddressTable(state: DeviceState): string[] {
+export function showMacAddressTable(entries: MacEntry[]): string[] {
   const out = ['          Mac Address Table', '-------------------------------------------', '', 'Vlan    Mac Address       Type        Ports', '----    -----------       --------    -----'];
-  let count = 0;
-  for (const n of state.neighbors) {
-    const i = state.interfaces[n.interface];
-    if (!i || i.shutdown || !i.connected) continue;
-    const vlan = i.mode === 'trunk' ? i.nativeVlan : i.accessVlan;
-    out.push(`${String(vlan).padStart(4)}    ${n.mac}    DYNAMIC     ${shortInterfaceName(i.name)}`);
-    count++;
+  for (const e of entries) out.push(`${String(e.vlan).padStart(4)}    ${e.mac}    DYNAMIC     ${shortInterfaceName(e.port)}`);
+  out.push(`Total Mac Addresses for this criterion: ${entries.length}`);
+  return out;
+}
+
+const ROUTE_CODES = [
+  'Codes: L - local, C - connected, S - static, R - RIP, M - mobile, B - BGP',
+  '       D - EIGRP, EX - EIGRP external, O - OSPF, IA - OSPF inter area',
+  '       N1 - OSPF NSSA external type 1, N2 - OSPF NSSA external type 2',
+  '       E1 - OSPF external type 1, E2 - OSPF external type 2',
+  '       i - IS-IS, su - IS-IS summary, L1 - IS-IS level-1, L2 - IS-IS level-2',
+  '       ia - IS-IS inter area, * - candidate default, U - per-user static route',
+  '       o - ODR, P - periodic downloaded static route, H - NHRP, l - LISP',
+  '       + - replicated route, % - next hop override',
+  '',
+];
+
+function routeText(e: RouteEntry): string {
+  const dest = `${e.destination}/${e.prefix}`;
+  if (e.source === 'static') return e.nextHop ? `${dest} [${e.adminDistance}/${e.metric}] via ${e.nextHop}` : `${dest} is directly connected, ${e.exitInterface}`;
+  return `${dest} is directly connected, ${e.exitInterface}`;
+}
+
+function routeCode(e: RouteEntry): string {
+  if (e.source === 'connected') return 'C';
+  if (e.source === 'local') return 'L';
+  return e.candidateDefault ? 'S*' : 'S';
+}
+
+/** IOS 15 style routing table, grouped by classful major network. */
+export function showIpRoute(entries: RouteEntry[]): string[] {
+  const out = [...ROUTE_CODES];
+  const def = entries.find((e) => e.candidateDefault);
+  out.push(def ? `Gateway of last resort is ${def.nextHop ?? def.exitInterface} to network 0.0.0.0` : 'Gateway of last resort is not set', '');
+  if (def) out.push(`${routeCode(def).padEnd(6)}${routeText(def)}`);
+  const groups = new Map<string, { network: string; prefix: number; entries: RouteEntry[] }>();
+  for (const e of entries) {
+    if (e.candidateDefault) continue;
+    const major = classfulNetwork(e.destination);
+    const key = `${major.network}/${major.prefix}`;
+    if (!groups.has(key)) groups.set(key, { network: major.network, prefix: major.prefix, entries: [] });
+    groups.get(key)!.entries.push(e);
   }
-  out.push(`Total Mac Addresses for this criterion: ${count}`);
+  const ordered = [...groups.values()].sort((a, b) => ipToInt(a.network)! - ipToInt(b.network)!);
+  for (const g of ordered) {
+    const single = g.entries.length === 1 && g.entries[0].prefix === g.prefix;
+    if (single) {
+      out.push(`${routeCode(g.entries[0]).padEnd(6)}${routeText(g.entries[0])}`);
+      continue;
+    }
+    const masks = new Set(g.entries.map((e) => e.prefix)).size;
+    const subnets = new Set(g.entries.map((e) => `${e.destination}/${e.prefix}`)).size;
+    out.push(`      ${g.network}/${g.prefix} is ${masks > 1 ? 'variably subnetted' : 'subnetted'}, ${subnets} subnet${subnets === 1 ? '' : 's'}${masks > 1 ? `, ${masks} masks` : ''}`);
+    for (const e of g.entries) out.push(`${routeCode(e).padEnd(9)}${routeText(e)}`);
+  }
   return out;
 }
 
 export function showVersion(state: DeviceState): string[] {
+  if (state.deviceType === 'router') {
+    return [
+      'Cisco IOS Software, C2900 Software (C2900-UNIVERSALK9-M), Version 15.4(3)M6, RELEASE SOFTWARE (fc1)',
+      'Technical Support: http://www.cisco.com/techsupport',
+      'Copyright (c) 1986-2016 by Cisco Systems, Inc.',
+      '',
+      `${state.hostname} uptime is 1 hour, 3 minutes`,
+      'System returned to ROM by power-on',
+      'System image file is "flash0:c2900-universalk9-mz.SPA.154-3.M6.bin"',
+      '',
+      'Cisco CISCO2911/K9 (revision 1.0) with 483328K/40960K bytes of memory.',
+      `${physicalInterfaces(state).length} Gigabit Ethernet interfaces`,
+      '255K bytes of non-volatile configuration memory.',
+      '',
+      'Configuration register is 0x2102',
+    ];
+  }
   return [
     `Cisco IOS Software, C2960 Software (C2960-LANBASEK9-M), Version ${IOS_VERSION}, RELEASE SOFTWARE (fc3)`,
     'Technical Support: http://www.cisco.com/techsupport',
