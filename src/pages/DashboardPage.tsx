@@ -1,17 +1,16 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import AccountMenu from '../components/AccountMenu';
 import Header from '../components/Header';
 import { isLabUnlocked, labs, labsForModule, modules } from '../content';
 import { useAuth } from '../lib/auth';
-import { loadUnlockAll, saveUnlockAll } from '../lib/progress';
 import { useProgress } from '../lib/progressStore';
 
 export default function DashboardPage() {
   const { progress, reset } = useProgress();
   const auth = useAuth();
-  const [unlockAll, setUnlockAll] = useState(loadUnlockAll);
   const completed = labs.filter((l) => progress[l.id]).length;
+  /** Labs need an account whenever the site has accounts at all. */
+  const mustSignIn = auth.enabled && !auth.loading && !auth.user;
 
   return (
     <div className="flex h-full flex-col">
@@ -20,17 +19,6 @@ export default function DashboardPage() {
         <span className="text-muted">
           {completed}/{labs.length} labs complete
         </span>
-        <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted" title="Ignore the lab order and open everything">
-          <input
-            type="checkbox"
-            checked={unlockAll}
-            onChange={(e) => {
-              setUnlockAll(e.target.checked);
-              saveUnlockAll(e.target.checked);
-            }}
-          />
-          Unlock all labs
-        </label>
         {completed > 0 && (
           <button
             type="button"
@@ -53,11 +41,10 @@ export default function DashboardPage() {
             'Progress is saved to your account.'
           ) : (
             <>
-              Progress is stored on this device;{' '}
               <Link to="/account" className="text-accent hover:underline">
-                create a free account
+                Sign in or create a free account
               </Link>{' '}
-              to keep it across devices.
+              to start the labs; your scores and stars follow you to any device.
             </>
           )}
         </p>
@@ -65,7 +52,7 @@ export default function DashboardPage() {
         {modules.map((m) => {
           const items = labsForModule(m.id);
           const done = items.filter((l) => progress[l.id]).length;
-          const moduleOpen = items.some((l) => isLabUnlocked(l.id, progress, unlockAll));
+          const moduleOpen = items.some((l) => isLabUnlocked(l.id, progress));
           return (
             <section key={m.id} className={`mt-10 ${moduleOpen ? '' : 'opacity-60'}`}>
               <div className="mb-3 flex items-end justify-between">
@@ -83,7 +70,7 @@ export default function DashboardPage() {
               <ol className="space-y-2">
                 {items.map((lab, idx) => {
                   const p = progress[lab.id];
-                  const unlocked = isLabUnlocked(lab.id, progress, unlockAll);
+                  const unlocked = isLabUnlocked(lab.id, progress);
                   return (
                     <li key={lab.id} className={`flex items-center gap-4 rounded-xl border border-border bg-surface p-4 ${unlocked ? '' : 'opacity-70'}`}>
                       <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${p ? 'border-success text-success' : unlocked ? 'border-border text-muted' : 'border-border text-muted'}`} aria-hidden>
@@ -113,7 +100,11 @@ export default function DashboardPage() {
                             <span className="text-border">{'★'.repeat(3 - p.stars)}</span>
                           </span>
                         )}
-                        {unlocked ? (
+                        {unlocked && mustSignIn ? (
+                          <Link to={`/account?next=/lab/${lab.id}`} className="rounded-lg border border-accent px-4 py-1.5 text-sm font-semibold text-accent hover:bg-accent-soft" title="Sign in to start this lab">
+                            Sign in to begin
+                          </Link>
+                        ) : unlocked ? (
                           <Link to={`/lab/${lab.id}`} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
                             {p ? 'Replay' : 'Begin'} →
                           </Link>

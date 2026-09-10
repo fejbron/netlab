@@ -20,7 +20,6 @@ describe('lab unlock order', () => {
     expect(isLabUnlocked(second.id, {})).toBe(false);
     expect(isLabUnlocked(second.id, { [first.id]: { score: 100 } })).toBe(true);
     expect(isLabUnlocked(third.id, { [first.id]: { score: 100 } })).toBe(false);
-    expect(isLabUnlocked(third.id, {}, true)).toBe(true);
   });
 
   it('gates each module on the last lab of the previous one', () => {

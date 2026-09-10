@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Header from '../components/Header';
 import AccountMenu from '../components/AccountMenu';
 import { labs } from '../content';
@@ -91,6 +91,10 @@ export default function AccountPage() {
   const auth = useAuth();
   const { progress, sync, syncError } = useProgress();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  // Where to go after signing in: only same-site paths are honoured.
+  const rawNext = params.get('next') ?? '/';
+  const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/';
   const [tab, setTab] = useState<Tab>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -106,11 +110,11 @@ export default function AccountPage() {
     try {
       if (tab === 'signin') {
         await auth.signIn(email.trim(), password);
-        navigate('/');
+        navigate(next);
       } else {
         const needsConfirm = await auth.signUp(email.trim(), password);
         if (needsConfirm) setNotice('Account created. Check your inbox for a confirmation link, then sign in.');
-        else navigate('/');
+        else navigate(next);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -209,7 +213,7 @@ export default function AccountPage() {
             </div>
             <h1 className="display mt-5 text-3xl text-fg-bright">{tab === 'signin' ? 'Welcome back' : 'Keep your progress'}</h1>
             <p className="mt-1 text-sm text-muted">
-              {tab === 'signin' ? 'Sign in to pick up where you left off on any device.' : 'A free account stores your scores and stars so you can continue from any device. Anything you passed as a guest on this device is kept.'}
+              {tab === 'signin' ? 'Sign in to pick up where you left off on any device.' : 'A free account stores your scores and stars so you can continue from any device and appear on the leaderboard.'}
             </p>
             <form onSubmit={submit} className="mt-5 flex flex-col gap-3">
               <label className="flex flex-col gap-1 text-xs text-muted">
@@ -250,9 +254,9 @@ export default function AccountPage() {
               Continue with GitHub
             </button>
             <p className="mt-4 text-xs text-muted">
-              No account needed to practise:{' '}
+              An account is required to run the labs. It only stores your scores, stars and display name.{' '}
               <Link to="/" className="text-accent hover:underline">
-                continue as a guest
+                Browse the lab list
               </Link>
               .
             </p>

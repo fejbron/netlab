@@ -8,7 +8,7 @@ import Topology from '../components/Topology';
 import { getLab, isLabUnlocked, labNetwork, nextLab, previousLab, type Lab } from '../content';
 import { executeHost, executeOn, grade, hostPrompt, isMaskedInput, prompt, tabComplete, type GradeResult, type NetworkState } from '../engine';
 import AccountMenu from '../components/AccountMenu';
-import { loadUnlockAll } from '../lib/progress';
+import { useAuth } from '../lib/auth';
 import { useProgress } from '../lib/progressStore';
 import { clearSession, loadSession, saveSession, type LabSession, type TermLine } from '../lib/session';
 
@@ -35,6 +35,7 @@ export default function LabPage() {
   const navigate = useNavigate();
   const lab = getLab(labId);
   const { progress, recordPass } = useProgress();
+  const auth = useAuth();
 
   const [session, setSession] = useState<LabSession | null>(() => (lab ? loadSession(lab.id) ?? freshSession(lab) : null));
   const [showChecks, setShowChecks] = useState(true);
@@ -68,7 +69,39 @@ export default function LabPage() {
     );
   }
 
-  if (!isLabUnlocked(lab.id, progress, loadUnlockAll())) {
+  // Labs require an account whenever the site has accounts.
+  if (auth.enabled && auth.loading) {
+    return (
+      <div className="flex h-full flex-col">
+        <Header />
+        <div className="flex flex-1 items-center justify-center text-sm text-muted">Loading…</div>
+      </div>
+    );
+  }
+  if (auth.enabled && !auth.user) {
+    return (
+      <div className="flex h-full flex-col">
+        <Header />
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
+          <p className="text-3xl" aria-hidden>
+            🔐
+          </p>
+          <p className="text-lg font-semibold text-fg-bright">Sign in to start {lab.title}</p>
+          <p className="max-w-md text-sm text-muted">Labs need an account so your scores and stars are saved and count on the leaderboard. It's free.</p>
+          <div className="flex gap-3">
+            <Link to={`/account?next=/lab/${lab.id}`} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
+              Sign in or create an account →
+            </Link>
+            <Link to="/" className="rounded-lg border border-border px-4 py-1.5 text-sm hover:bg-surface-2">
+              Lab list
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isLabUnlocked(lab.id, progress)) {
     const prev = previousLab(lab.id);
     return (
       <div className="flex h-full flex-col">
@@ -78,7 +111,7 @@ export default function LabPage() {
             🔒
           </p>
           <p className="text-lg font-semibold text-fg-bright">{lab.title} is locked</p>
-          <p className="max-w-md text-sm text-muted">Labs unlock in order. Pass {prev ? <strong className="text-fg">{prev.title}</strong> : 'the previous lab'} first, or turn on "Unlock all labs" on the lab list.</p>
+          <p className="max-w-md text-sm text-muted">Labs unlock in order. Pass {prev ? <strong className="text-fg">{prev.title}</strong> : 'the previous lab'} first.</p>
           <div className="flex gap-3">
             {prev && (
               <Link to={`/lab/${prev.id}`} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-bg hover:brightness-110">

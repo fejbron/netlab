@@ -59,8 +59,7 @@ export function previousLab(id: string): Lab | undefined {
  * Labs unlock in order: a lab is available once the lab before it has been passed.
  * The first lab is always open, and passing the last lab of a module opens the next module.
  */
-export function isLabUnlocked(id: string, completed: Record<string, unknown>, unlockAll = false): boolean {
-  if (unlockAll) return true;
+export function isLabUnlocked(id: string, completed: Record<string, unknown>): boolean {
   const prev = previousLab(id);
   return prev === undefined || Boolean(completed[prev.id]);
 }
