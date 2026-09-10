@@ -7,7 +7,7 @@ export type { SwitchOptions, RouterOptions, NeighborSpec, NetworkExecResult } fr
 export { renderConfigBody, showRunningConfig, formatVlanList, interfaceStatus } from './ios/show';
 export { grade, evaluateCheck } from './grader';
 export type { Check, Objective, GradeResult, ObjectiveResult, CheckResult } from './grader';
-export { buildNetwork, fromSwitch, isNetworkState, ping, traceroute, routingTable, lookupRoute, peerOf, ifaceUp, syncLinkState, nodeName, HOST_IFACE, isLoopback, isSubinterface } from './network';
-export type { NetworkState, HostState, HostSpec, NetworkSpec, Link, Endpoint, RouteEntry, PingResult, Hop } from './network';
+export { buildNetwork, fromSwitch, isNetworkState, ping, traceroute, routingTable, lookupRoute, peerOf, ifaceUp, syncLinkState, nodeName, HOST_IFACE, isLoopback, isSubinterface, ospfNeighbors, ospfInterfaces, ospfRouterId, ospfRoutes } from './network';
+export type { NetworkState, HostState, HostSpec, NetworkSpec, Link, Endpoint, RouteEntry, PingResult, Hop, OspfNeighbor, OspfInterfaceInfo } from './network';
 export { executeHost, hostPrompt } from './host';
 export type { HostExecResult } from './host';

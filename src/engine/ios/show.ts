@@ -1,7 +1,7 @@
 import type { DeviceState, InterfaceState } from '../types';
 import { compareInterfaceNames, isSvi, shortInterfaceName } from '../interfaces';
-import { isLoopback, isSubinterface, type MacEntry, type RouteEntry } from '../network';
-import { classfulNetwork, ipToInt } from './net';
+import { isLoopback, isSubinterface, type MacEntry, type OspfInterfaceInfo, type OspfNeighbor, type RouteEntry } from '../network';
+import { classfulNetwork, ipToInt, prefixLength } from './net';
 
 export const IOS_VERSION = '15.2(7)E8';
 
@@ -110,8 +110,23 @@ function renderRouterConfigBody(state: DeviceState): string[] {
     if (i.description) out.push(` description ${i.description}`);
     if (i.encapsulation) out.push(` encapsulation dot1Q ${i.encapsulation.vlan}${i.encapsulation.native ? ' native' : ''}`);
     out.push(i.ipAddress && i.subnetMask ? ` ip address ${i.ipAddress} ${i.subnetMask}` : ' no ip address');
+    if (i.ospfArea !== undefined && state.ospf) out.push(` ip ospf ${state.ospf.processId} area ${i.ospfArea}`);
+    if (i.ospfCost !== undefined) out.push(` ip ospf cost ${i.ospfCost}`);
+    if (i.ospfPriority !== undefined) out.push(` ip ospf priority ${i.ospfPriority}`);
     if (i.shutdown) out.push(' shutdown');
     if (!isSubinterface(i.name) && !isLoopback(i.name)) out.push(' duplex auto', ' speed auto');
+    out.push('!');
+  }
+  if (state.ospf) {
+    const o = state.ospf;
+    out.push(`router ospf ${o.processId}`);
+    if (o.routerId) out.push(` router-id ${o.routerId}`);
+    if (o.passiveDefault) {
+      out.push(' passive-interface default');
+      for (const i of o.activeInterfaces) out.push(` no passive-interface ${i}`);
+    } else for (const i of o.passiveInterfaces) out.push(` passive-interface ${i}`);
+    for (const n of o.networks) out.push(` network ${n.address} ${n.wildcard} area ${n.area}`);
+    if (o.defaultInformationOriginate) out.push(' default-information originate');
     out.push('!');
   }
   out.push('ip forward-protocol nd', '!');
@@ -281,12 +296,15 @@ const ROUTE_CODES = [
 function routeText(e: RouteEntry): string {
   const dest = `${e.destination}/${e.prefix}`;
   if (e.source === 'static') return e.nextHop ? `${dest} [${e.adminDistance}/${e.metric}] via ${e.nextHop}` : `${dest} is directly connected, ${e.exitInterface}`;
+  if (e.source === 'ospf' || e.source === 'ospf-external') return `${dest} [${e.adminDistance}/${e.metric}] via ${e.nextHop}, 00:02:14, ${e.exitInterface}`;
   return `${dest} is directly connected, ${e.exitInterface}`;
 }
 
 function routeCode(e: RouteEntry): string {
   if (e.source === 'connected') return 'C';
   if (e.source === 'local') return 'L';
+  if (e.source === 'ospf') return 'O';
+  if (e.source === 'ospf-external') return e.candidateDefault ? 'O*E2' : 'O E2';
   return e.candidateDefault ? 'S*' : 'S';
 }
 
@@ -316,6 +334,52 @@ export function showIpRoute(entries: RouteEntry[]): string[] {
     out.push(`      ${g.network}/${g.prefix} is ${masks > 1 ? 'variably subnetted' : 'subnetted'}, ${subnets} subnet${subnets === 1 ? '' : 's'}${masks > 1 ? `, ${masks} masks` : ''}`);
     for (const e of g.entries) out.push(`${routeCode(e).padEnd(9)}${routeText(e)}`);
   }
+  return out;
+}
+
+export function showIpOspfNeighbor(nbrs: OspfNeighbor[]): string[] {
+  const out = ['', 'Neighbor ID     Pri   State           Dead Time   Address         Interface'];
+  for (const n of nbrs) out.push(`${n.routerId.padEnd(16)}${String(n.priority).padStart(3)}   ${n.state.padEnd(16)}00:00:3${(ipToInt(n.ip) ?? 0) % 10}    ${n.ip.padEnd(16)}${n.iface === n.localIface ? n.localIface : n.localIface}`);
+  return out;
+}
+
+export function showIpOspfInterfaceBrief(pid: number, rows: Array<{ info: OspfInterfaceInfo; role: string; neighbors: number }>): string[] {
+  const out = ['Interface    PID   Area            IP Address/Mask    Cost  State Nbrs F/C'];
+  for (const r of rows) {
+    out.push(`${shortInterfaceName(r.info.name).padEnd(13)}${String(pid).padEnd(6)}${String(r.info.area).padEnd(16)}${`${r.info.ip}/${prefixLength(r.info.mask)}`.padEnd(19)}${String(r.info.cost).padEnd(6)}${r.role.padEnd(6)}${r.neighbors}/${r.neighbors}`);
+  }
+  return out;
+}
+
+export function showIpOspf(state: DeviceState, routerId: string | null, infos: OspfInterfaceInfo[], nbrs: OspfNeighbor[]): string[] {
+  const areas = [...new Set(infos.map((i) => i.area))].sort((a, b) => a - b);
+  const out = [` Routing Process "ospf ${state.ospf!.processId}" with ID ${routerId ?? '0.0.0.0'}`, ' Start time: 00:00:12.000, Time elapsed: 00:14:02.000', ' Supports only single TOS(TOS0) routes', ' Router is not originating router-LSAs with maximum metric', ' Initial SPF schedule delay 5000 msecs', ` Number of areas in this router is ${areas.length}. ${areas.length} normal 0 stub 0 nssa`, ` Reference bandwidth unit is 100 mbps`];
+  for (const a of areas) {
+    const ifs = infos.filter((i) => i.area === a);
+    out.push(a === 0 ? '    Area BACKBONE(0)' : `    Area ${a}`, `        Number of interfaces in this area is ${ifs.length}`, `        Area has no authentication`, `        SPF algorithm executed 4 times`, `        Number of LSA 3. Checksum Sum 0x01A2B3`);
+  }
+  out.push(` Number of neighbors: ${nbrs.length}`);
+  return out;
+}
+
+export function showIpProtocols(state: DeviceState, routerId: string | null, infos: OspfInterfaceInfo[], nbrs: OspfNeighbor[]): string[] {
+  if (!state.ospf) return ['*** IP Routing is NSF aware ***', '', 'No IP routing protocols are configured'];
+  const o = state.ospf;
+  const out = ['*** IP Routing is NSF aware ***', '', `Routing Protocol is "ospf ${o.processId}"`, '  Outgoing update filter list for all interfaces is not set', '  Incoming update filter list for all interfaces is not set', `  Router ID ${routerId ?? '0.0.0.0'}`, `  Number of areas in this router is ${new Set(infos.map((i) => i.area)).size}. ${new Set(infos.map((i) => i.area)).size} normal 0 stub 0 nssa`, '  Maximum path: 4', '  Routing for Networks:'];
+  for (const n of o.networks) out.push(`    ${n.address} ${n.wildcard} area ${n.area}`);
+  const viaIface = infos.filter((i) => state.interfaces[i.name]?.ospfArea !== undefined);
+  if (viaIface.length) {
+    out.push('  Routing on Interfaces Configured Explicitly (Area ...):');
+    for (const i of viaIface) out.push(`    ${i.name}`);
+  }
+  const passive = infos.filter((i) => i.passive && !isLoopback(i.name));
+  if (passive.length || o.passiveDefault) {
+    out.push('  Passive Interface(s):');
+    for (const i of passive) out.push(`    ${i.name}`);
+  }
+  out.push('  Routing Information Sources:', '    Gateway         Distance      Last Update');
+  for (const n of nbrs) out.push(`    ${n.routerId.padEnd(16)}110      00:02:14`);
+  out.push('  Distance: (default is 110)');
   return out;
 }
 

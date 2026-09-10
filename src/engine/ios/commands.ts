@@ -1,7 +1,7 @@
 import type { CommandDef } from '../resolver';
 import type { DeviceState, DeviceType, InterfaceState, Mode } from '../types';
 import { isSvi, normalizeInterfaceName, shortInterfaceName, sviVlanId } from '../interfaces';
-import { isLoopback, isSubinterface, macTable, nodeName, parentInterface, ping as netPing, routingTable, type NetworkState } from '../network';
+import { isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, routingTable, type NetworkState } from '../network';
 import { isValidIp, isValidMask, networkAddress, parseVlanList } from './net';
 import {
   defaultVlanName,
@@ -11,6 +11,10 @@ import {
   showInterfacesStatus,
   showInterfacesTrunk,
   showIpInterfaceBrief,
+  showIpOspf,
+  showIpOspfInterfaceBrief,
+  showIpOspfNeighbor,
+  showIpProtocols,
   showIpRoute,
   showIpSsh,
   showMacAddressTable,
@@ -105,6 +109,18 @@ export const WORD_HELP: Record<string, string> = {
   history: 'Display the session command history',
   users: 'Display information about terminal lines',
   static: 'Static routes',
+  router: 'Enable a routing process',
+  ospf: 'Open Shortest Path First (OSPF)',
+  'router-id': 'router-id for this OSPF process',
+  network: 'Enable routing on an IP network',
+  area: 'Set the OSPF area ID',
+  'passive-interface': 'Suppress routing updates on an interface',
+  'default-information': 'Control distribution of default information',
+  originate: 'Distribute a default route',
+  cost: 'Interface cost',
+  priority: 'Router priority',
+  neighbor: 'Neighbor list',
+  protocols: 'IP routing protocol process parameters and statistics',
 };
 
 // ---------------------------------------------------------------------------
@@ -325,10 +341,23 @@ const SHOW_SWITCH_USER: Def[] = [
   },
 ];
 
+function ospfBrief(ctx: Ctx): string[] {
+  const { state, network, nodeId } = ctx;
+  if (!state.ospf) return ['%OSPF: No router process configured'];
+  const rows = ospfInterfaces(network, nodeId).map((info) => ({ info, ...ospfInterfaceRole(network, nodeId, info) }));
+  return showIpOspfInterfaceBrief(state.ospf.processId, rows);
+}
+
 const SHOW_ROUTER_USER: Def[] = [
   ...SHOW_COMMON_USER,
   { pattern: 'show ip route', help: 'IP routing table', run: ({ network, nodeId }) => showIpRoute(routingTable(network, nodeId)) },
   { pattern: 'show ip route static', help: 'Static routes', run: ({ network, nodeId }) => showIpRoute(routingTable(network, nodeId).filter((e) => e.source === 'static')) },
+  { pattern: 'show ip route ospf', help: 'Open Shortest Path First (OSPF)', run: ({ network, nodeId }) => showIpRoute(routingTable(network, nodeId).filter((e) => e.source === 'ospf' || e.source === 'ospf-external')) },
+  { pattern: 'show ip ospf neighbor', help: 'Neighbor list', run: ({ state, network, nodeId }) => (state.ospf ? showIpOspfNeighbor(ospfNeighbors(network, nodeId)) : ['%OSPF: No router process configured']) },
+  { pattern: 'show ip ospf interface brief', help: 'Brief summary of OSPF interfaces', run: (ctx) => ospfBrief(ctx) },
+  { pattern: 'show ip ospf interface', help: 'Interface information', run: (ctx) => ospfBrief(ctx) },
+  { pattern: 'show ip ospf', help: 'OSPF information', run: ({ state, network, nodeId }) => (state.ospf ? showIpOspf(state, ospfRouterId(network, nodeId), ospfInterfaces(network, nodeId), ospfNeighbors(network, nodeId)) : ['%OSPF: No router process configured']) },
+  { pattern: 'show ip protocols', help: 'IP routing protocol process parameters and statistics', run: ({ state, network, nodeId }) => showIpProtocols(state, ospfRouterId(network, nodeId), ospfInterfaces(network, nodeId), ospfNeighbors(network, nodeId)) },
   {
     pattern: 'show interfaces <interface>',
     help: 'Interface status and configuration',
@@ -527,9 +556,97 @@ function removeStaticRoute(state: DeviceState, dest: string, mask: string, via?:
   if (state.staticRoutes.length === before) return ['%No matching route to delete'];
 }
 
-export const GLOBAL_CONFIG_ROUTER: Def[] = [
+function enterRouterOspf(state: DeviceState, pidText: string): string[] | void {
+  const pid = Number(pidText);
+  if (!/^\d+$/.test(pidText) || pid < 1 || pid > 65535) return [INVALID_INPUT];
+  if (state.ospf && state.ospf.processId !== pid) return [`% OSPF process ${state.ospf.processId} already exists; this simulator supports one process per router.`];
+  if (!state.ospf) state.ospf = { processId: pid, networks: [], passiveDefault: false, passiveInterfaces: [], activeInterfaces: [], defaultInformationOriginate: false };
+  state.mode = 'router';
+  state.currentInterface = undefined;
+  state.currentInterfaces = undefined;
+  state.currentVlan = undefined;
+  state.currentLine = undefined;
+}
+
+/** Commands available from any config submode on a router. */
+const ROUTER_JUMPS: Def[] = [
   ...COMMON_JUMPS,
+  { pattern: 'router ospf <process>', help: 'Open Shortest Path First (OSPF)', run: ({ state }, a) => enterRouterOspf(state, a.process) },
+];
+
+function parseArea(text: string): number | null {
+  if (/^\d+$/.test(text)) return Number(text);
+  if (isValidIp(text)) return (ipToIntSafe(text) ?? 0) >>> 0;
+  return null;
+}
+
+function ipToIntSafe(ip: string): number | null {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some((p) => Number.isNaN(p) || p < 0 || p > 255)) return null;
+  return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+export const ROUTER_CONFIG: Def[] = [
+  { pattern: 'router-id <id>', help: 'router-id for this OSPF process', run: ({ state }, a) => { if (!isValidIp(a.id)) return [INVALID_INPUT]; state.ospf!.routerId = a.id; return ['Reload or use "clear ip ospf process" command, for this to take effect']; } },
+  { pattern: 'no router-id', help: 'Remove the configured router-id', run: ({ state }) => void (state.ospf!.routerId = undefined) },
+  {
+    pattern: 'network <address> <wildcard> area <area>',
+    help: 'Enable routing on an IP network',
+    run: ({ state }, a) => {
+      const area = parseArea(a.area);
+      if (!isValidIp(a.address) || !isValidIp(a.wildcard) || area === null) return [INVALID_INPUT];
+      const cfg = state.ospf!;
+      cfg.networks = cfg.networks.filter((n) => !(n.address === a.address && n.wildcard === a.wildcard));
+      cfg.networks.push({ address: a.address, wildcard: a.wildcard, area });
+    },
+  },
+  {
+    pattern: 'no network <address> <wildcard> area <area>',
+    help: 'Disable routing on an IP network',
+    run: ({ state }, a) => {
+      const area = parseArea(a.area);
+      const cfg = state.ospf!;
+      const before = cfg.networks.length;
+      cfg.networks = cfg.networks.filter((n) => !(n.address === a.address && n.wildcard === a.wildcard && n.area === area));
+      if (cfg.networks.length === before) return ['%OSPF: No such network statement'];
+    },
+  },
+  { pattern: 'passive-interface default', help: 'Suppress routing updates on all interfaces', run: ({ state }) => { state.ospf!.passiveDefault = true; state.ospf!.activeInterfaces = []; } },
+  { pattern: 'no passive-interface default', help: 'Send routing updates on all interfaces', run: ({ state }) => { state.ospf!.passiveDefault = false; state.ospf!.passiveInterfaces = []; } },
+  {
+    pattern: 'passive-interface <interface...>',
+    help: 'Suppress routing updates on an interface',
+    run: ({ state }, a) => {
+      const name = normalizeInterfaceName(a.interface.replace(/\s+/g, ''));
+      if (!name || !state.interfaces[name]) return [INVALID_INPUT];
+      const cfg = state.ospf!;
+      if (cfg.passiveDefault) cfg.activeInterfaces = cfg.activeInterfaces.filter((i) => i !== name);
+      else if (!cfg.passiveInterfaces.includes(name)) cfg.passiveInterfaces.push(name);
+    },
+  },
+  {
+    pattern: 'no passive-interface <interface...>',
+    help: 'Send routing updates on an interface',
+    run: ({ state }, a) => {
+      const name = normalizeInterfaceName(a.interface.replace(/\s+/g, ''));
+      if (!name || !state.interfaces[name]) return [INVALID_INPUT];
+      const cfg = state.ospf!;
+      if (cfg.passiveDefault) {
+        if (!cfg.activeInterfaces.includes(name)) cfg.activeInterfaces.push(name);
+      } else cfg.passiveInterfaces = cfg.passiveInterfaces.filter((i) => i !== name);
+    },
+  },
+  { pattern: 'default-information originate', help: 'Distribute a default route', run: ({ state }) => void (state.ospf!.defaultInformationOriginate = true) },
+  { pattern: 'no default-information originate', help: 'Stop distributing a default route', run: ({ state }) => void (state.ospf!.defaultInformationOriginate = false) },
+  { pattern: 'exit', help: 'Exit from routing protocol configuration mode', run: ({ state }) => void (state.mode = 'config') },
+  ...EXIT_CONFIG,
+  ...ROUTER_JUMPS,
+];
+
+export const GLOBAL_CONFIG_ROUTER: Def[] = [
+  ...ROUTER_JUMPS,
   ...GLOBAL_COMMON,
+  { pattern: 'no router ospf <process>', help: 'Remove the OSPF process', run: ({ state }, a) => { if (!state.ospf || state.ospf.processId !== Number(a.process)) return ['%OSPF: Process not found']; state.ospf = undefined; } },
   { pattern: 'ip route <destination> <mask> <via>', help: 'Establish static routes', run: ({ state }, a) => addStaticRoute(state, a.destination, a.mask, a.via) },
   { pattern: 'ip route <destination> <mask> <via> <distance>', help: 'Distance metric for this route', run: ({ state }, a) => addStaticRoute(state, a.destination, a.mask, a.via, a.distance) },
   { pattern: 'no ip route <destination> <mask> <via>', help: 'Remove a static route', run: ({ state }, a) => removeStaticRoute(state, a.destination, a.mask, a.via) },
@@ -605,7 +722,12 @@ export const INTERFACE_CONFIG_ROUTER: Def[] = [
   { pattern: 'encapsulation dot1q <vlan>', help: 'IEEE 802.1Q Virtual LAN', run: ({ state }, a) => setEncapsulation(state, a.vlan, false) },
   { pattern: 'encapsulation dot1q <vlan> native', help: 'Make this as native vlan', run: ({ state }, a) => setEncapsulation(state, a.vlan, true) },
   { pattern: 'no encapsulation dot1q', help: 'Remove the encapsulation', run: ({ state }) => void (currentInterface(state).encapsulation = undefined) },
-  ...COMMON_JUMPS,
+  { pattern: 'ip ospf cost <cost>', help: 'Interface cost', run: ({ state }, a) => { const c = Number(a.cost); if (!/^\d+$/.test(a.cost) || c < 1 || c > 65535) return [INVALID_INPUT]; return forEachTarget(state, (i) => void (i.ospfCost = c)); } },
+  { pattern: 'no ip ospf cost', help: 'Reset interface cost', run: ({ state }) => forEachTarget(state, (i) => void (i.ospfCost = undefined)) },
+  { pattern: 'ip ospf priority <priority>', help: 'Router priority', run: ({ state }, a) => { const p = Number(a.priority); if (!/^\d+$/.test(a.priority) || p > 255) return [INVALID_INPUT]; return forEachTarget(state, (i) => void (i.ospfPriority = p)); } },
+  { pattern: 'ip ospf <process> area <area>', help: 'Set the OSPF area ID', run: ({ state }, a) => { const area = parseArea(a.area); if (!/^\d+$/.test(a.process) || area === null) return [INVALID_INPUT]; if (!state.ospf) state.ospf = { processId: Number(a.process), networks: [], passiveDefault: false, passiveInterfaces: [], activeInterfaces: [], defaultInformationOriginate: false }; return forEachTarget(state, (i) => void (i.ospfArea = area)); } },
+  { pattern: 'no ip ospf <process> area <area>', help: 'Remove OSPF from the interface', run: ({ state }) => forEachTarget(state, (i) => void (i.ospfArea = undefined)) },
+  ...ROUTER_JUMPS,
 ];
 
 export const VLAN_CONFIG: Def[] = [
@@ -638,7 +760,7 @@ function lineConfig(jumps: Def[]): Def[] {
 }
 
 export const LINE_CONFIG: Def[] = lineConfig(SWITCH_JUMPS);
-export const LINE_CONFIG_ROUTER: Def[] = lineConfig(COMMON_JUMPS);
+export const LINE_CONFIG_ROUTER: Def[] = lineConfig(ROUTER_JUMPS);
 
 export function defsForMode(mode: Mode, deviceType: DeviceType = 'switch'): Def[] {
   const router = deviceType === 'router';
@@ -655,6 +777,8 @@ export function defsForMode(mode: Mode, deviceType: DeviceType = 'switch'): Def[
       return VLAN_CONFIG;
     case 'line':
       return router ? LINE_CONFIG_ROUTER : LINE_CONFIG;
+    case 'router':
+      return ROUTER_CONFIG;
   }
 }
 

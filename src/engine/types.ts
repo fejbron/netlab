@@ -1,7 +1,26 @@
 /** CLI modes supported by the IOS-style device model. */
-export type Mode = 'user' | 'privileged' | 'config' | 'interface' | 'vlan' | 'line';
+export type Mode = 'user' | 'privileged' | 'config' | 'interface' | 'vlan' | 'line' | 'router';
 
 export type DeviceType = 'switch' | 'router';
+
+export interface OspfNetworkStatement {
+  address: string;
+  wildcard: string;
+  area: number;
+}
+
+/** A single OSPFv2 process ("router ospf <id>"). */
+export interface OspfConfig {
+  processId: number;
+  routerId?: string;
+  networks: OspfNetworkStatement[];
+  passiveDefault: boolean;
+  /** Interfaces made passive explicitly (when passiveDefault is false). */
+  passiveInterfaces: string[];
+  /** Interfaces un-passived explicitly (when passiveDefault is true). */
+  activeInterfaces: string[];
+  defaultInformationOriginate: boolean;
+}
 
 export interface StaticRoute {
   destination: string;
@@ -31,6 +50,12 @@ export interface InterfaceState {
   subnetMask?: string;
   /** Router subinterfaces: "encapsulation dot1Q <vlan> [native]". */
   encapsulation?: { vlan: number; native: boolean };
+  /** "ip ospf cost <n>"; default is 1 for Gigabit and loopback interfaces. */
+  ospfCost?: number;
+  /** "ip ospf priority <n>"; default 1. */
+  ospfPriority?: number;
+  /** "ip ospf <pid> area <n>" enables OSPF on the interface without a network statement. */
+  ospfArea?: number;
 }
 
 export interface VlanState {
@@ -98,6 +123,7 @@ export interface DeviceState {
   /** Routers forward between interfaces; switches never do. */
   ipRouting: boolean;
   staticRoutes: StaticRoute[];
+  ospf?: OspfConfig;
 
   enablePassword?: string;
   enableSecret?: string;

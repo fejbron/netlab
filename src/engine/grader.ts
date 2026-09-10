@@ -1,6 +1,6 @@
 import { normalizeInterfaceName } from './interfaces';
 import { renderConfigBody } from './ios/show';
-import type { NetworkState } from './network';
+import { ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, type NetworkState, type RouteEntry } from './network';
 import type { CliErrorKind, DeviceState, LineState, Mode, PortMode } from './types';
 
 interface Base {
@@ -47,6 +47,16 @@ export type Check = Base &
     | { type: 'ping'; target: string; success?: boolean }
     | { type: 'route'; destination: string; mask: string; via?: string }
     | { type: 'route-absent'; destination: string; mask: string }
+    /** A prefix present in the live routing table, optionally from a given source. */
+    | { type: 'learned-route'; destination: string; mask: string; source?: RouteEntry['source'] }
+    | { type: 'ospf'; processId?: number; routerId?: string }
+    | { type: 'ospf-network'; address: string; wildcard: string; area: number }
+    | { type: 'ospf-network-absent'; address: string; wildcard: string; area?: number }
+    | { type: 'ospf-neighbors'; min: number; routerId?: string }
+    | { type: 'passive-interface'; name: string; passive?: boolean }
+    | { type: 'default-information-originate' }
+    /** Trunk allows at least these VLANs (explicit list or "all"). */
+    | { type: 'trunk-allows'; name: string; vlans: number[] }
   );
 
 export interface Objective {
@@ -118,6 +128,22 @@ function describe(check: Check): string {
       return `Route to ${check.destination} ${check.mask}${check.via ? ` via ${check.via}` : ''}${on}`;
     case 'route-absent':
       return `No route to ${check.destination} ${check.mask}${on}`;
+    case 'learned-route':
+      return `${check.destination} ${check.mask} is in the routing table${check.source ? ` via ${check.source}` : ''}${on}`;
+    case 'ospf':
+      return `OSPF${check.processId ? ` process ${check.processId}` : ''} is running${check.routerId ? ` with router-id ${check.routerId}` : ''}${on}`;
+    case 'ospf-network':
+      return `network ${check.address} ${check.wildcard} area ${check.area}${on}`;
+    case 'ospf-network-absent':
+      return `network ${check.address} ${check.wildcard} is removed${on}`;
+    case 'ospf-neighbors':
+      return check.routerId ? `OSPF neighbor ${check.routerId} is up${on}` : `At least ${check.min} OSPF neighbor${check.min === 1 ? '' : 's'}${on}`;
+    case 'passive-interface':
+      return `${check.name} is ${check.passive === false ? 'not ' : ''}passive${on}`;
+    case 'default-information-originate':
+      return `default-information originate is configured${on}`;
+    case 'trunk-allows':
+      return `${check.name} allows VLANs ${check.vlans.join(',')}${on}`;
   }
 }
 
@@ -209,6 +235,36 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
     }
     case 'route-absent':
       return !state.staticRoutes.some((r) => r.destination === check.destination && r.mask === check.mask);
+    case 'learned-route':
+      return routingTable(net, state.id).some((e) => e.destination === check.destination && e.mask === check.mask && (check.source === undefined || e.source === check.source));
+    case 'ospf': {
+      if (!state.ospf) return false;
+      if (check.processId !== undefined && state.ospf.processId !== check.processId) return false;
+      if (check.routerId !== undefined && ospfRouterId(net, state.id) !== check.routerId) return false;
+      return true;
+    }
+    case 'ospf-network':
+      return Boolean(state.ospf?.networks.some((n) => n.address === check.address && n.wildcard === check.wildcard && n.area === check.area));
+    case 'ospf-network-absent':
+      return !state.ospf?.networks.some((n) => n.address === check.address && n.wildcard === check.wildcard && (check.area === undefined || n.area === check.area));
+    case 'ospf-neighbors': {
+      const nbrs = ospfNeighbors(net, state.id);
+      if (check.routerId !== undefined) return nbrs.some((n) => n.routerId === check.routerId);
+      return nbrs.length >= check.min;
+    }
+    case 'passive-interface': {
+      const name = normalizeInterfaceName(check.name);
+      const info = ospfInterfaces(net, state.id).find((i) => i.name === name);
+      return Boolean(info) && info!.passive === (check.passive ?? true);
+    }
+    case 'default-information-originate':
+      return Boolean(state.ospf?.defaultInformationOriginate);
+    case 'trunk-allows': {
+      const name = normalizeInterfaceName(check.name);
+      const i = name ? state.interfaces[name] : undefined;
+      if (!i || i.mode !== 'trunk') return false;
+      return i.trunkAllowed === 'all' || check.vlans.every((v) => (i.trunkAllowed as number[]).includes(v));
+    }
   }
 }
 

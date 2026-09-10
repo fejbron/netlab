@@ -21,6 +21,8 @@ export function prompt(state: DeviceState): string {
       return `${h}(config-vlan)#`;
     case 'line':
       return `${h}(config-line)#`;
+    case 'router':
+      return `${h}(config-router)#`;
   }
 }
 
@@ -272,6 +274,8 @@ export interface RouterOptions {
   /** Per-interface overrides; subinterfaces ("g0/0.10") and loopbacks are created on demand. */
   interfaces?: Record<string, Partial<InterfaceState>>;
   staticRoutes?: Array<{ destination: string; mask: string; nextHop?: string; exitInterface?: string; adminDistance?: number }>;
+  /** Pre-configured OSPF process. Networks are [address, wildcard, area] triples. */
+  ospf?: { processId?: number; routerId?: string; networks?: Array<[string, string, number]>; passiveInterfaces?: string[]; defaultInformationOriginate?: boolean };
   overrides?: Partial<DeviceState>;
 }
 
@@ -296,5 +300,16 @@ export function createRouter(options: RouterOptions = {}): DeviceState {
   dev.staticRoutes = (options.staticRoutes ?? []).map(
     (r): StaticRoute => ({ destination: r.destination, mask: r.mask, nextHop: r.nextHop, exitInterface: r.exitInterface ? normalize(r.exitInterface) : undefined, adminDistance: r.adminDistance ?? 1 }),
   );
+  if (options.ospf) {
+    dev.ospf = {
+      processId: options.ospf.processId ?? 1,
+      routerId: options.ospf.routerId,
+      networks: (options.ospf.networks ?? []).map(([address, wildcard, area]) => ({ address, wildcard, area })),
+      passiveDefault: false,
+      passiveInterfaces: (options.ospf.passiveInterfaces ?? []).map(normalize),
+      activeInterfaces: [],
+      defaultInformationOriginate: options.ospf.defaultInformationOriginate ?? false,
+    };
+  }
   return { ...dev, ...options.overrides };
 }
