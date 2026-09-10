@@ -1,5 +1,7 @@
 # NetLab
 
+[![CI](https://github.com/edbron/netlab/actions/workflows/ci.yml/badge.svg)](https://github.com/edbron/netlab/actions/workflows/ci.yml)
+
 Open-source network CLI labs that run entirely in your browser. Practise Cisco IOS switch configuration in a simulated terminal, get graded live against lab objectives, and track progress on your device. No installs, no accounts, no payments.
 
 > Status: early MVP. Cisco IOS switches and routers, PCs with a mini terminal, 34 labs across four modules (Meet the CLI, Learn Switching, Secure the Switch, Learn Routing), a faithful command resolver, a packet-forwarding simulation, and a live grader. See the roadmap below.
