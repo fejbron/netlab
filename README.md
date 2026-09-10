@@ -46,7 +46,14 @@ npm run build     # type-check and build to dist/
 
 NetLab works without any backend. To let learners create accounts and keep progress across devices, point it at a free [Supabase](https://supabase.com) project:
 
-1. Create a Supabase project and open its SQL editor. Paste and run `supabase/schema.sql`. It creates the `lab_progress` table with row-level security, so each learner can only read and write their own rows, plus a `profiles` table (public display name, leaderboard opt-out, filled in automatically when an account is created) and the `leaderboard` view, which totals stars across learners without exposing anyone's individual rows. The file is safe to re-run after upgrades.
+1. Create a Supabase project and apply `supabase/schema.sql`, either by pasting it into the dashboard's SQL editor or from the command line with the Supabase CLI (no database password needed, it goes through the management API after a browser login):
+
+   ```bash
+   npx supabase@2 login
+   npx supabase@2 db query --linked --project-ref <your-project-ref> -f supabase/schema.sql
+   ```
+
+   It creates the `lab_progress` table with row-level security, so each learner can only read and write their own rows, plus a `profiles` table (public display name, leaderboard opt-out, filled in automatically when an account is created) and the `leaderboard` view, which totals stars across learners without exposing anyone's individual rows. The file is safe to re-run after upgrades.
 2. In Authentication > Providers, keep Email enabled. Optionally enable GitHub and add your site URL under Authentication > URL Configuration (add `http://localhost:5173` for local development, and `/account` as an allowed redirect path).
 3. Copy the project URL and the anon (public) key from Project Settings > API into a `.env.local` file (see `.env.example`):
 
