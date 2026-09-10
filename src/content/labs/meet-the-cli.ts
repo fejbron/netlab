@@ -109,7 +109,7 @@ export const meetTheCliLabs: Lab[] = [
     hints: [
       'In privileged mode type shwo running-config exactly like that, misspelled.',
       'In config mode type hostname and press Enter with nothing after it.',
-      'Back in privileged mode type sh st. It matches both show startup-config and show spanning-tree.',
+      'Back in privileged mode type sh st. It matches both show startup-config and show storm-control, so IOS cannot pick one.',
       'From Switch(config)#, type do show running-config.',
     ],
     createState: () => office(),

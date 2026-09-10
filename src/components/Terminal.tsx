@@ -28,7 +28,13 @@ export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onCle
     const keep = onSubmit(line);
     if (!masked && line.trim()) setHistory((h) => [...h.slice(-99), line]);
     setHistoryIndex(null);
-    if (!keep) setValue('');
+    // "?" help leaves the partial command in place, like IOS re-printing it after the help text.
+    setValue(keep ? line.replace(/\?$/, '') : '');
+  }
+
+  function onChange(next: string) {
+    if (!masked && next.endsWith('?')) submit(next);
+    else setValue(next);
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
@@ -86,7 +92,7 @@ export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onCle
             ref={inputRef}
             type={masked ? 'password' : 'text'}
             value={value}
-            onChange={(e) => setValue(e.target.value)}
+            onChange={(e) => onChange(e.target.value)}
             onKeyDown={onKeyDown}
             autoFocus
             autoComplete="off"

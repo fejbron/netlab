@@ -7,6 +7,7 @@ const defs: CommandDef<Ctx>[] = [
   { pattern: 'show running-config', help: 'run', run: (c) => void c.log.push('run') },
   { pattern: 'show startup-config', help: 'start', run: (c) => void c.log.push('start') },
   { pattern: 'show spanning-tree', help: 'stp', run: (c) => void c.log.push('stp') },
+  { pattern: 'show storm-control', help: 'storm', run: (c) => void c.log.push('storm') },
   { pattern: 'show interfaces status', help: 'status', run: (c) => void c.log.push('status') },
   { pattern: 'show interfaces <interface> switchport', help: 'swp', run: (c, a) => void c.log.push(`swp:${a.interface}`) },
   { pattern: 'configure terminal', help: 'conf', run: (c) => void c.log.push('conf') },
@@ -34,11 +35,12 @@ describe('resolve', () => {
 
   it('reports ambiguous prefixes', () => {
     const { res } = run('sh st');
-    expect(res).toMatchObject({ kind: 'ambiguous', index: 1, options: ['startup-config', 'spanning-tree'].sort() });
+    expect(res).toMatchObject({ kind: 'ambiguous', index: 1, options: ['startup-config', 'storm-control'] });
   });
 
   it('resolves once the prefix is unique', () => {
-    expect(run('sh star').log).toEqual(['start']);
+    expect(run('sh sta').log).toEqual(['start']);
+    expect(run('sh sto').log).toEqual(['storm']);
     expect(run('sh sp').log).toEqual(['stp']);
     expect(run('sh run').log).toEqual(['run']);
   });
@@ -76,13 +78,13 @@ describe('help and completion', () => {
   it('lists completions for a partial word', () => {
     const words = help(defs, ['sh'], true).map((e) => e.word);
     expect(words).toEqual(['show']);
-    const shows = help(defs, ['show', 's'], true).map((e) => e.word);
-    expect(shows).toEqual(['spanning-tree', 'startup-config']);
+    const shows = help(defs, ['show', 'st'], true).map((e) => e.word);
+    expect(shows).toEqual(['startup-config', 'storm-control']);
   });
 
   it('lists what may follow a complete word', () => {
     const words = help(defs, ['show'], false).map((e) => e.word);
-    expect(words).toEqual(['interfaces', 'running-config', 'spanning-tree', 'startup-config']);
+    expect(words).toEqual(['interfaces', 'running-config', 'spanning-tree', 'startup-config', 'storm-control']);
     const after = help(defs, ['show', 'interfaces'], false).map((e) => e.word);
     expect(after).toEqual(['<interface>', 'status']);
   });
@@ -95,6 +97,6 @@ describe('help and completion', () => {
   it('completes unique prefixes only', () => {
     expect(complete(defs, ['conf'])).toBe('configure');
     expect(complete(defs, ['show', 'st'])).toBeNull();
-    expect(complete(defs, ['show', 'star'])).toBe('startup-config');
+    expect(complete(defs, ['show', 'sta'])).toBe('startup-config');
   });
 });

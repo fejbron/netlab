@@ -54,11 +54,32 @@ export const WORD_HELP: Record<string, string> = {
   crypto: 'Encryption module',
   service: 'Modify use of network based services',
   'spanning-tree': 'Spanning Tree Subsystem',
+  'storm-control': 'Show packet storm control configuration',
   no: 'Negate a command or set its defaults',
   do: 'To run exec commands in config mode',
   description: 'Interface specific description',
   shutdown: 'Shutdown the selected interface',
   switchport: 'Set switching mode characteristics',
+  mode: 'Set trunking mode of the interface',
+  access: 'Set access mode characteristics of the interface',
+  trunk: 'Set trunking characteristics of the interface',
+  allowed: 'Set allowed VLAN characteristics when interface is in trunking mode',
+  native: 'Set trunking native characteristics when interface is in trunking mode',
+  encapsulation: 'Set trunking encapsulation when interface is in trunking mode',
+  address: 'Set the IP address of an interface',
+  'default-gateway': 'Specify default gateway (if not routing IP)',
+  'domain-name': 'Define the default domain name',
+  ssh: 'Configure ssh options',
+  console: 'Primary terminal line',
+  vty: 'Virtual terminal',
+  secret: 'Assign the privileged level secret',
+  privilege: 'Set user privilege level',
+  motd: 'Set Message of the Day banner',
+  memory: 'Write to NV memory',
+  input: 'Define which protocols to use when connecting to the terminal server',
+  brief: 'Brief summary of IP status and configuration',
+  status: 'Show interface line status',
+  local: 'Local password checking',
   speed: 'Configure speed operation.',
   duplex: 'Configure duplex operation.',
   name: 'Ascii name of the VLAN',
@@ -191,6 +212,7 @@ const SHOW_USER: Def[] = [
   { pattern: 'show mac address-table', help: 'MAC forwarding table', run: ({ state }) => showMacAddressTable(state) },
   { pattern: 'show history', help: 'Display the session command history', run: ({ state }) => showHistory(state) },
   { pattern: 'show spanning-tree', help: 'Spanning tree topology', run: ({ state }) => showSpanningTree(state) },
+  { pattern: 'show storm-control', help: 'Show packet storm control configuration', run: () => ['Interface  Filter State   Upper        Lower        Current'] },
   { pattern: 'show users', help: 'Display information about terminal lines', run: () => ['    Line       User       Host(s)              Idle       Location', '*  0 con 0                idle                 00:00:00'] },
 ];
 
@@ -261,6 +283,19 @@ function leaveConfig(state: DeviceState) {
 const GLOBAL_JUMPS: Def[] = [
   { pattern: 'interface <interface...>', help: 'Select an interface to configure', run: ({ state }, a) => enterInterface(state, a.interface.replace(/\s+/g, '')) },
   { pattern: 'vlan <id>', help: 'Vlan commands', run: ({ state }, a) => enterVlan(state, a.id) },
+  {
+    pattern: 'no vlan <id>',
+    help: 'Delete a VLAN',
+    run: ({ state }, a) => {
+      const id = Number(a.id);
+      if (id === 1 || (id >= 1002 && id <= 1005)) return [`% Default VLAN ${id} may not be deleted.`];
+      delete state.vlans[id];
+      if (state.currentVlan === id) {
+        state.mode = 'config';
+        state.currentVlan = undefined;
+      }
+    },
+  },
   { pattern: 'line console <number>', help: 'Primary terminal line', run: ({ state }) => enterLine(state, 'con') },
   { pattern: 'line vty <first> <last>', help: 'Virtual terminal', run: ({ state }) => enterLine(state, 'vty') },
   { pattern: 'line vty <first>', help: 'Virtual terminal', run: ({ state }) => enterLine(state, 'vty') },
@@ -294,7 +329,6 @@ export const GLOBAL_CONFIG: Def[] = [
   { pattern: 'username <name> privilege <level> password <password>', help: 'Set user privilege level', run: ({ state }, a) => setUser(state, a.name, a.password, false, Number(a.level)) },
   { pattern: 'username <name> privilege <level> secret <secret>', help: 'Set user privilege level', run: ({ state }, a) => setUser(state, a.name, a.secret, true, Number(a.level)) },
   { pattern: 'no username <name>', help: 'Remove a user', run: ({ state }, a) => void (state.users = state.users.filter((u) => u.username !== a.name)) },
-  { pattern: 'no vlan <id>', help: 'Delete a VLAN', run: ({ state }, a) => { const id = Number(a.id); if (id === 1 || (id >= 1002 && id <= 1005)) return [`% Default VLAN ${id} may not be deleted.`]; delete state.vlans[id]; } },
   { pattern: 'ip default-gateway <address>', help: 'Specify default gateway (if not routing IP)', run: ({ state }, a) => { if (!isValidIp(a.address)) return [INVALID_INPUT]; state.ipDefaultGateway = a.address; } },
   { pattern: 'no ip default-gateway', help: 'Remove default gateway', run: ({ state }) => void (state.ipDefaultGateway = undefined) },
   { pattern: 'ip domain-name <name>', help: 'Define the default domain name', run: ({ state }, a) => void (state.ipDomainName = a.name) },

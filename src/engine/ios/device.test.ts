@@ -136,6 +136,11 @@ describe('configuration', () => {
     expect(brief.find((l) => l.startsWith('1 '))).toMatch(/default\s+active\s+Gi0\/3, Gi0\/4/);
     s.run('conf t', 'no vlan 10', 'end');
     expect(s.state.vlans[10]).toBeUndefined();
+    // IOS accepts global commands from inside a submode, including deleting the VLAN you are editing.
+    s.run('conf t', 'vlan 40', 'no vlan 40');
+    expect(s.state.vlans[40]).toBeUndefined();
+    expect(prompt(s.state)).toBe('Switch(config)#');
+    s.run('end');
     expect(s.run('conf t', 'no vlan 1')[0]).toBe('% Default VLAN 1 may not be deleted.');
   });
 
@@ -244,6 +249,7 @@ describe('help and completion', () => {
     expect(tabComplete(s.state, 'show ru')).toBe('show running-config ');
     expect(tabComplete(s.state, 'sh st')).toBeNull();
     s.run('conf t');
-    expect(tabComplete(s.state, 'do sh ru')).toBe('do show running-config ');
+    // Like IOS, Tab completes only the word being typed; earlier abbreviations stay as typed.
+    expect(tabComplete(s.state, 'do sh ru')).toBe('do sh running-config ');
   });
 });
