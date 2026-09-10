@@ -2,6 +2,7 @@ import { Link, Route, Routes } from 'react-router-dom';
 import AccountPage from './pages/AccountPage';
 import DashboardPage from './pages/DashboardPage';
 import LabPage from './pages/LabPage';
+import LeaderboardPage from './pages/LeaderboardPage';
 import { AuthProvider } from './lib/auth';
 import { ProgressProvider } from './lib/progressStore';
 
@@ -24,6 +25,7 @@ export default function App() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/lab/:labId" element={<LabPage />} />
           <Route path="/account" element={<AccountPage />} />
+          <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </ProgressProvider>

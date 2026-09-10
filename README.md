@@ -24,6 +24,7 @@ Open-source network CLI labs that run entirely in your browser. Practise Cisco I
 - **PC terminal**: `ipconfig` (with `/all`, `/renew`, `/release`), `ping` and `tracert` (IPv4 and IPv6) with Windows-style output, so learners test from the host like they would on the job.
 - **Labs with live grading**: objectives are declarative checks on device state, command history and ping results, scoped to any device in the topology. The sidebar ticks off objectives as you type.
 - **Progress on device, or in an account**: guest mode keeps everything in `localStorage` and nothing leaves the browser. When the site operator enables accounts (see below), learners can sign up with email and password or GitHub, and their best score and stars per lab are stored server-side and follow them across devices. Guest progress is merged into the account on first sign-in.
+- **Leaderboard**: with accounts enabled, `/leaderboard` ranks learners by total stars (then labs passed, then who got there first). Each learner has a public display name, defaulting to their GitHub user name or the part of their email before the @, editable on the account page, and can opt out of the board. Emails are never shown.
 
 ## Quick start
 
@@ -45,7 +46,7 @@ npm run build     # type-check and build to dist/
 
 NetLab works without any backend. To let learners create accounts and keep progress across devices, point it at a free [Supabase](https://supabase.com) project:
 
-1. Create a Supabase project and open its SQL editor. Paste and run `supabase/schema.sql`. It creates the `lab_progress` table with row-level security, so each learner can only read and write their own rows.
+1. Create a Supabase project and open its SQL editor. Paste and run `supabase/schema.sql`. It creates the `lab_progress` table with row-level security, so each learner can only read and write their own rows, plus a `profiles` table (public display name, leaderboard opt-out, filled in automatically when an account is created) and the `leaderboard` view, which totals stars across learners without exposing anyone's individual rows. The file is safe to re-run after upgrades.
 2. In Authentication > Providers, keep Email enabled. Optionally enable GitHub and add your site URL under Authentication > URL Configuration (add `http://localhost:5173` for local development, and `/account` as an allowed redirect path).
 3. Copy the project URL and the anon (public) key from Project Settings > API into a `.env.local` file (see `.env.example`):
 

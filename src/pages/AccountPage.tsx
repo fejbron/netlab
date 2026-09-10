@@ -1,12 +1,91 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Header from '../components/Header';
 import AccountMenu from '../components/AccountMenu';
 import { labs } from '../content';
 import { useAuth } from '../lib/auth';
+import { fetchProfile, updateProfile, type Profile } from '../lib/leaderboard';
 import { useProgress } from '../lib/progressStore';
 
 type Tab = 'signin' | 'signup';
+
+/** Public name and leaderboard opt-out for the signed-in learner. */
+function ProfileSettings({ userId, fallbackName }: { userId: string; fallbackName: string }) {
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchProfile(userId)
+      .then((p) => {
+        if (cancelled) return;
+        const resolved = p ?? { id: userId, displayName: fallbackName, showOnLeaderboard: true };
+        setProfile(resolved);
+        setName(resolved.displayName);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setMessage({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, fallbackName]);
+
+  async function save(patch: Partial<Pick<Profile, 'displayName' | 'showOnLeaderboard'>>) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await updateProfile(userId, patch);
+      setProfile((p) => (p ? { ...p, ...patch } : p));
+      setMessage({ kind: 'ok', text: 'Saved.' });
+    } catch (e) {
+      setMessage({ kind: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!profile) return <p className="mt-5 text-xs text-muted">{message ? <span className="text-danger">{message.text}</span> : 'Loading profile…'}</p>;
+  const trimmed = name.trim();
+  const valid = trimmed.length >= 2 && trimmed.length <= 32;
+  return (
+    <div className="mt-5 border-t border-border pt-5">
+      <h2 className="text-sm font-semibold text-fg-bright">Leaderboard</h2>
+      <form
+        className="mt-2 flex items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (valid && trimmed !== profile.displayName) void save({ displayName: trimmed });
+        }}
+      >
+        <label className="flex flex-1 flex-col gap-1 text-xs text-muted">
+          Display name (shown publicly)
+          <input
+            type="text"
+            value={name}
+            minLength={2}
+            maxLength={32}
+            onChange={(e) => setName(e.target.value)}
+            className="rounded-md border border-border bg-bg px-3 py-2 text-sm text-fg-bright outline-none focus:border-accent"
+          />
+        </label>
+        <button type="submit" disabled={busy || !valid || trimmed === profile.displayName} className="rounded-md border border-border px-3 py-2 text-sm text-fg hover:border-fg disabled:opacity-50">
+          Save
+        </button>
+      </form>
+      <label className="mt-3 flex cursor-pointer items-center gap-2 text-sm text-muted">
+        <input type="checkbox" checked={profile.showOnLeaderboard} disabled={busy} onChange={(e) => void save({ showOnLeaderboard: e.target.checked })} />
+        Show me on the leaderboard
+      </label>
+      {message && <p className={`mt-2 text-xs ${message.kind === 'ok' ? 'text-success' : 'text-danger'}`}>{message.text}</p>}
+      <Link to="/leaderboard" className="mt-3 inline-block text-xs text-accent hover:underline">
+        View the leaderboard →
+      </Link>
+    </div>
+  );
+}
 
 export default function AccountPage() {
   const auth = useAuth();
@@ -96,6 +175,7 @@ export default function AccountPage() {
               {sync === 'error' && <span className="text-danger">Sync failed: {syncError}</span>}
               {sync === 'local' && 'Progress is stored on this device.'}
             </p>
+            <ProfileSettings userId={auth.user.id} fallbackName={auth.user.email?.split('@')[0] ?? 'learner'} />
             <div className="mt-6 flex gap-3">
               <Link to="/" className="rounded-md bg-accent px-3 py-1.5 text-sm font-semibold text-bg hover:opacity-90">
                 Back to the labs
