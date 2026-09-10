@@ -15,6 +15,8 @@ import type { DeviceState, InterfaceState, PingRecord } from './types';
 import { isSvi, normalizeInterfaceName, sviVlanId } from './interfaces';
 import { intToIp, ipToInt, isValidIp, networkAddress, prefixLength, sameSubnet } from './ios/net';
 import { evaluateAcl, type Packet } from './acl';
+import { isIpv6, isLinkLocal6, linkLocalFromMac, networkAddress6, normalizeIpv6, parseIpv6, prefixMask6, sameSubnet6 } from './ipv6';
+import { natOwnsAddress, translateDestination, translateSource } from './nat';
 
 export interface HostState {
   kind: 'host';
@@ -29,9 +31,17 @@ export interface HostState {
   /** Obtains its address with DHCP ("ipconfig /renew") instead of static settings. */
   dhcp?: boolean;
   dhcpServer?: string;
+  /** Static IPv6 settings. The link-local address is always derived from the MAC. */
+  ip6?: string;
+  prefix6?: number;
+  gateway6?: string;
   mac: string;
   commandHistory: string[];
   pings: PingRecord[];
+}
+
+export function hostLinkLocal(h: HostState): string {
+  return linkLocalFromMac(h.mac);
 }
 
 export interface Endpoint {
@@ -136,6 +146,9 @@ export interface HostSpec {
   gateway?: string;
   dns?: string;
   dhcp?: boolean;
+  /** "2001:DB8:1::10/64" */
+  ip6?: string;
+  gateway6?: string;
   kind?: HostState['deviceKind'];
 }
 
@@ -162,7 +175,12 @@ export function buildNetwork(spec: NetworkSpec): NetworkState {
   for (const d of spec.devices) devices[d.id] = d;
   const hosts: Record<string, HostState> = {};
   (spec.hosts ?? []).forEach((h, idx) => {
-    hosts[h.id] = { kind: 'host', id: h.id, name: h.name ?? h.id, deviceKind: h.kind ?? 'pc', ip: h.ip, mask: h.mask, gateway: h.gateway, dns: h.dns, dhcp: h.dhcp, mac: `0011.22bb.${String(idx + 1).padStart(4, '0')}`, commandHistory: [], pings: [] };
+    const v6 = h.ip6 ? h.ip6.split('/') : undefined;
+    hosts[h.id] = {
+      kind: 'host', id: h.id, name: h.name ?? h.id, deviceKind: h.kind ?? 'pc', ip: h.ip, mask: h.mask, gateway: h.gateway, dns: h.dns, dhcp: h.dhcp,
+      ip6: v6 ? normalizeIpv6(v6[0]) ?? undefined : undefined, prefix6: v6 ? Number(v6[1] ?? 64) : undefined, gateway6: h.gateway6 ? normalizeIpv6(h.gateway6) ?? undefined : undefined,
+      mac: `0011.22bb.${String(idx + 1).padStart(4, '0')}`, commandHistory: [], pings: [],
+    };
   });
   const net: NetworkState = { primary: spec.primary ?? spec.devices[0].id, devices, hosts, links: [] };
   for (const [a, b] of spec.links) net.links.push({ a: parseEnd(net, a), b: parseEnd(net, b) });
@@ -498,6 +516,72 @@ export function lookupRoute(table: RouteEntry[], ip: string): RouteEntry | null 
 }
 
 // ---------------------------------------------------------------------------
+// IPv6 addressing and routing
+
+export interface Ipv6Addresses {
+  global: Array<{ address: string; prefix: number }>;
+  linkLocal?: string;
+}
+
+/** IPv6 addresses active on a device interface (empty when IPv6 is not enabled on it). */
+export function ifaceIpv6(dev: DeviceState, iface: InterfaceState): Ipv6Addresses {
+  const cfg = iface.ipv6;
+  if (!cfg || (!cfg.enabled && cfg.addresses.length === 0)) return { global: [] };
+  return { global: cfg.addresses.map((a) => ({ address: a.address, prefix: a.prefix })), linkLocal: cfg.linkLocal ?? linkLocalFromMac(routerMac(dev.id, iface.name)) };
+}
+
+export interface RouteEntry6 {
+  prefix: string;
+  length: number;
+  source: 'connected' | 'local' | 'static';
+  nextHop?: string;
+  exitInterface: string;
+  adminDistance: number;
+}
+
+function inPrefix6(ip: string, prefix: string, length: number): boolean {
+  return sameSubnet6(ip, prefix, length);
+}
+
+export function routingTable6(net: NetworkState, deviceId: string): RouteEntry6[] {
+  const dev = net.devices[deviceId];
+  const entries: RouteEntry6[] = [];
+  for (const i of Object.values(dev.interfaces)) {
+    if (!ifaceUp(net, deviceId, i.name)) continue;
+    for (const a of ifaceIpv6(dev, i).global) {
+      entries.push({ prefix: networkAddress6(a.address, a.prefix), length: a.prefix, source: 'connected', exitInterface: i.name, adminDistance: 0 });
+      entries.push({ prefix: a.address, length: 128, source: 'local', exitInterface: i.name, adminDistance: 0 });
+    }
+  }
+  if (dev.ipv6UnicastRouting) {
+    for (const r of dev.staticRoutes6) {
+      let exit = r.exitInterface;
+      if (exit) {
+        if (!ifaceUp(net, deviceId, exit)) continue;
+      } else {
+        const via = entries.filter((e) => e.source === 'connected' && inPrefix6(r.nextHop!, e.prefix, e.length)).sort((a, b) => b.length - a.length)[0];
+        if (!via) continue;
+        exit = via.exitInterface;
+      }
+      entries.push({ prefix: r.prefix, length: r.length, source: 'static', nextHop: r.nextHop, exitInterface: exit, adminDistance: r.adminDistance });
+    }
+  }
+  return entries.sort((a, b) => {
+    const d = (parseIpv6(a.prefix) ?? 0n) - (parseIpv6(b.prefix) ?? 0n);
+    return d < 0n ? -1 : d > 0n ? 1 : a.length - b.length;
+  });
+}
+
+export function lookupRoute6(table: RouteEntry6[], ip: string): RouteEntry6 | null {
+  let best: RouteEntry6 | null = null;
+  for (const e of table) {
+    if (!inPrefix6(ip, e.prefix, e.length)) continue;
+    if (!best || e.length > best.length || (e.length === best.length && e.adminDistance < best.adminDistance)) best = e;
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------------
 // forwarding
 
 interface Decision {
@@ -511,12 +595,54 @@ interface Decision {
 
 function ownsIp(net: NetworkState, node: string, ip: string): boolean {
   const h = net.hosts[node];
+  if (isIpv6(ip)) {
+    const target = normalizeIpv6(ip)!;
+    if (h) return h.ip6 === target || hostLinkLocal(h) === target;
+    const dev = net.devices[node];
+    return Object.values(dev.interfaces).some((i) => {
+      if (!ifaceUp(net, node, i.name)) return false;
+      const v6 = ifaceIpv6(dev, i);
+      return v6.linkLocal === target || v6.global.some((a) => a.address === target);
+    });
+  }
   if (h) return h.ip === ip;
   const dev = net.devices[node];
   return Object.values(dev.interfaces).some((i) => i.ipAddress === ip && ifaceUp(net, node, i.name));
 }
 
+function decide6(net: NetworkState, node: string, dst: string): Decision | { error: string } {
+  const h = net.hosts[node];
+  if (h) {
+    if (!h.ip6 || h.prefix6 === undefined) return { error: 'no ip address' };
+    if (isLinkLocal6(dst) || sameSubnet6(dst, h.ip6, h.prefix6)) return { frame: { node, iface: HOST_IFACE, tag: null }, target: dst, srcIp: h.ip6 };
+    if (!h.gateway6) return { error: 'no gateway' };
+    return { frame: { node, iface: HOST_IFACE, tag: null }, target: h.gateway6, srcIp: h.ip6 };
+  }
+  const dev = net.devices[node];
+  if (dev.deviceType !== 'router') return { error: 'no route' };
+  if (isLinkLocal6(dst)) {
+    // Link-local targets are per link: try every IPv6-enabled interface (IOS would ask which one).
+    for (const i of Object.values(dev.interfaces)) {
+      if (isLoopback(i.name) || !ifaceUp(net, node, i.name)) continue;
+      const v6 = ifaceIpv6(dev, i);
+      if (!v6.linkLocal) continue;
+      const frame = egressFrame(dev, i);
+      if (findEndpoint(net, frame, dst)) return { frame, target: dst, srcIp: v6.linkLocal, exitInterface: i.name };
+    }
+    return { error: 'no route' };
+  }
+  const entry = lookupRoute6(routingTable6(net, node), dst);
+  if (!entry) return { error: 'no route' };
+  const exit = dev.interfaces[entry.exitInterface];
+  if (isLoopback(exit.name)) return { error: 'no route' };
+  const v6 = ifaceIpv6(dev, exit);
+  const srcIp = v6.global[0]?.address ?? v6.linkLocal;
+  if (!srcIp) return { error: 'no route' };
+  return { frame: egressFrame(dev, exit), target: entry.nextHop ?? dst, srcIp, exitInterface: exit.name };
+}
+
 function decide(net: NetworkState, node: string, dst: string): Decision | { error: string } {
+  if (isIpv6(dst)) return decide6(net, node, normalizeIpv6(dst)!);
   const h = net.hosts[node];
   if (h) {
     if (!h.ip || !h.mask) return { error: 'no ip address' };
@@ -541,9 +667,27 @@ function decide(net: NetworkState, node: string, dst: string): Decision | { erro
   return { frame: egressFrame(dev, exit), target: entry.nextHop ?? dst, srcIp: exit.ipAddress!, exitInterface: exit.name };
 }
 
-/** Find the node/interface that answers ARP for `target` on the segment behind `start`. */
+/** Find the node/interface that answers ARP (or neighbour discovery) for `target` on the segment behind `start`. */
 function findEndpoint(net: NetworkState, start: Frame, target: string): Endpoint | null {
   const arrivals = l2Walk(net, start);
+  if (isIpv6(target)) {
+    const t = normalizeIpv6(target)!;
+    for (const a of arrivals) {
+      if (a.kind === 'host') {
+        const h = net.hosts[a.node];
+        if (h.ip6 === t || hostLinkLocal(h) === t) return { node: a.node, iface: HOST_IFACE };
+      }
+      if (a.kind === 'router') {
+        const dev = net.devices[a.node];
+        const owner = a.receivers.find((r) => {
+          const v6 = ifaceIpv6(dev, r);
+          return v6.linkLocal === t || v6.global.some((g) => g.address === t);
+        });
+        if (owner) return { node: a.node, iface: owner.name };
+      }
+    }
+    return null;
+  }
   for (const a of arrivals) {
     if (a.kind === 'host' && net.hosts[a.node].ip === target) return { node: a.node, iface: HOST_IFACE };
     if (a.kind === 'svi' && net.devices[a.node].interfaces[a.iface].ipAddress === target) return { node: a.node, iface: a.iface };
@@ -551,6 +695,13 @@ function findEndpoint(net: NetworkState, start: Frame, target: string): Endpoint
       const owner = a.receivers.find((r) => r.ipAddress === target);
       if (owner) return { node: a.node, iface: owner.name };
     }
+  }
+  // NAT: the outside interface answers for static globals and pool addresses.
+  for (const a of arrivals) {
+    if (a.kind !== 'router') continue;
+    const dev = net.devices[a.node];
+    const nat = a.receivers.find((r) => natOwnsAddress(dev, r, target));
+    if (nat) return { node: a.node, iface: nat.name };
   }
   // Proxy ARP: a router answers for addresses it can route toward through another interface.
   for (const a of arrivals) {
@@ -582,13 +733,28 @@ export interface AclDenial {
 export interface ForwardResult {
   reached: boolean;
   hops: Hop[];
+  /** Source address as the destination saw it (after any NAT). */
   srcIp?: string;
+  /** Source port/identifier as the destination saw it (after any PAT). */
+  srcPort?: number;
   reason?: string;
   denied?: AclDenial;
   hits: AclHit[];
 }
 
 export type PacketSpec = Omit<Packet, 'src' | 'dst'> & { src?: string };
+
+export interface ForwardOptions {
+  /** Create NAT translations while forwarding (off for reachability probes). */
+  record?: boolean;
+}
+
+/** Deterministic ICMP identifier for a source address, used as the PAT "port". */
+function icmpId(src: string): number {
+  let h = 0;
+  for (const c of src) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return 1 + (h % 60000);
+}
 
 /**
  * Evaluate an access list applied to a router interface. Returns the denial, or null
@@ -606,42 +772,74 @@ function checkAcl(net: NetworkState, node: string, ifaceName: string, direction:
   return r.permit ? null : { node, ip: iface.ipAddress, acl: name };
 }
 
-/** Walk a packet from `from` toward `dst`, one layer-3 hop at a time, applying ACLs at each router. */
-export function forward(net: NetworkState, from: string, dst: string, spec: PacketSpec = { protocol: 'icmp', icmpType: 'echo' }): ForwardResult {
+/**
+ * Walk a packet from `from` toward `dst`, one layer-3 hop at a time, applying ACLs and
+ * NAT at each router. Works for IPv4 and IPv6 destinations (NAT and ACLs are IPv4 only).
+ */
+export function forward(net: NetworkState, from: string, dstArg: string, spec: PacketSpec = { protocol: 'icmp', icmpType: 'echo' }, opts: ForwardOptions = {}): ForwardResult {
   const hits: AclHit[] = [];
-  if (!isValidIp(dst)) return { reached: false, hops: [], reason: 'bad address', hits };
+  const v6 = isIpv6(dstArg);
+  if (!v6 && !isValidIp(dstArg)) return { reached: false, hops: [], reason: 'bad address', hits };
+  const record = opts.record ?? true;
+  let dst = v6 ? normalizeIpv6(dstArg)! : dstArg;
+  let dstPort = spec.dstPort;
   let cur = from;
   const hops: Hop[] = [];
   let srcIp: string | undefined = spec.src;
+  let srcPort: number | undefined = spec.srcPort;
+  let inIface: string | undefined;
   for (let ttl = 0; ttl < 32; ttl++) {
-    if (ownsIp(net, cur, dst)) return { reached: true, hops, srcIp: srcIp ?? dst, hits };
+    if (ownsIp(net, cur, dst)) return { reached: true, hops, srcIp: srcIp ?? dst, srcPort, hits };
     const d = decide(net, cur, dst);
-    if ('error' in d) return { reached: false, hops, srcIp, reason: d.error, hits };
+    if ('error' in d) return { reached: false, hops, srcIp, srcPort, reason: d.error, hits };
     srcIp ??= d.srcIp;
-    const packet: Packet = { ...spec, src: srcIp, dst };
+    srcPort ??= icmpId(srcIp);
+    const curDev = net.devices[cur];
+    // NAT source translation when crossing from an inside to an outside interface.
+    if (!v6 && curDev && cur !== from && d.exitInterface && inIface) {
+      const exit = curDev.interfaces[d.exitInterface];
+      const entry = curDev.interfaces[inIface];
+      if (entry?.natRole === 'inside' && exit?.natRole === 'outside') {
+        const t = translateSource(curDev, exit, spec.protocol, srcIp, srcPort, dst, record);
+        if (!t) return { reached: false, hops, srcIp, srcPort, reason: 'nat pool exhausted', hits };
+        srcIp = t.src;
+        srcPort = t.port;
+      }
+    }
+    const packet: Packet = { ...spec, src: srcIp, dst, srcPort, dstPort };
     // Outbound ACLs apply to transit traffic, never to packets the router itself created.
-    if (cur !== from && d.exitInterface) {
+    if (!v6 && cur !== from && d.exitInterface) {
       const denial = checkAcl(net, cur, d.exitInterface, 'out', packet, hits);
-      if (denial) return { reached: false, hops, srcIp, reason: 'acl', denied: { ...denial, ip: hops[hops.length - 1]?.ip ?? denial.ip }, hits };
+      if (denial) return { reached: false, hops, srcIp, srcPort, reason: 'acl', denied: { ...denial, ip: hops[hops.length - 1]?.ip ?? denial.ip }, hits };
     }
     const ep = findEndpoint(net, d.frame, d.target);
-    if (!ep) return { reached: false, hops, srcIp, reason: 'unreachable', hits };
+    if (!ep) return { reached: false, hops, srcIp, srcPort, reason: 'unreachable', hits };
     if (net.hosts[ep.node]) {
       const h = net.hosts[ep.node];
-      if (h.ip === dst) return { reached: true, hops: [...hops, { node: ep.node, ip: h.ip }], srcIp, hits };
-      return { reached: false, hops, srcIp, reason: 'host does not forward', hits };
+      if (h.ip === dst || h.ip6 === dst || hostLinkLocal(h) === dst) return { reached: true, hops: [...hops, { node: ep.node, ip: dst }], srcIp, srcPort, hits };
+      return { reached: false, hops, srcIp, srcPort, reason: 'host does not forward', hits };
     }
     const dev = net.devices[ep.node];
-    if (dev.deviceType === 'router') {
+    if (dev.deviceType === 'router' && !v6) {
       const denial = checkAcl(net, ep.node, ep.iface, 'in', packet, hits);
-      if (denial) return { reached: false, hops, srcIp, reason: 'acl', denied: denial, hits };
+      if (denial) return { reached: false, hops, srcIp, srcPort, reason: 'acl', denied: denial, hits };
+      // Replies arriving on an outside interface are mapped back to the inside host.
+      if (dev.interfaces[ep.iface]?.natRole === 'outside') {
+        const back = translateDestination(dev, spec.protocol, dst, dstPort);
+        if (back) {
+          dst = back.dst;
+          dstPort = back.port;
+        }
+      }
     }
-    if (ownsIp(net, ep.node, dst)) return { reached: true, hops: [...hops, { node: ep.node, ip: dst }], srcIp, hits };
-    hops.push({ node: ep.node, ip: dev.interfaces[ep.iface]?.ipAddress });
-    if (dev.deviceType !== 'router' || !dev.ipRouting) return { reached: false, hops, srcIp, reason: 'not a router', hits };
+    if (ownsIp(net, ep.node, dst)) return { reached: true, hops: [...hops, { node: ep.node, ip: dst }], srcIp, srcPort, hits };
+    const arrived = dev.interfaces[ep.iface];
+    hops.push({ node: ep.node, ip: v6 ? (ifaceIpv6(dev, arrived).global[0]?.address ?? ifaceIpv6(dev, arrived).linkLocal) : arrived?.ipAddress });
+    if (dev.deviceType !== 'router' || (v6 ? !dev.ipv6UnicastRouting : !dev.ipRouting)) return { reached: false, hops, srcIp, srcPort, reason: 'not a router', hits };
     cur = ep.node;
+    inIface = ep.iface;
   }
-  return { reached: false, hops, srcIp, reason: 'ttl exceeded', hits };
+  return { reached: false, hops, srcIp, srcPort, reason: 'ttl exceeded', hits };
 }
 
 export interface PingResult {
@@ -654,12 +852,18 @@ export interface PingResult {
   hits: AclHit[];
 }
 
+/**
+ * Ping semantics: the echo must reach the owner of `dst` and the echo-reply must find
+ * its way back to whatever source address the destination saw (after NAT).
+ * Note: NAT translations created by the echo are recorded on the routers in `net`.
+ */
 export function ping(net: NetworkState, from: string, dst: string): PingResult {
   const out = forward(net, from, dst, { protocol: 'icmp', icmpType: 'echo' });
   if (!out.reached) return { success: false, hops: out.hops, reason: out.reason, denied: out.denied, hits: out.hits };
   const dstNode = out.hops[out.hops.length - 1]?.node ?? from;
   if (dstNode === from) return { success: true, hops: out.hops, hits: out.hits };
-  const back = forward(net, dstNode, out.srcIp!, { protocol: 'icmp', icmpType: 'echo-reply', src: dst });
+  const replyDst = out.hops[out.hops.length - 1]?.ip ?? dst;
+  const back = forward(net, dstNode, out.srcIp!, { protocol: 'icmp', icmpType: 'echo-reply', src: replyDst, dstPort: out.srcPort });
   const hits = [...out.hits, ...back.hits];
   if (back.reached) return { success: true, hops: out.hops, hits };
   return { success: false, hops: out.hops, reason: back.denied ? 'reply filtered by acl' : `no return path (${back.reason})`, hits };
@@ -724,8 +928,8 @@ export function dhcpRequest(net: NetworkState, hostId: string): DhcpResult {
       if (r.helperAddress) {
         const server = Object.values(net.devices).find((d) => d.deviceType === 'router' && Object.values(d.interfaces).some((i) => i.ipAddress === r.helperAddress && ifaceUp(net, d.id, i.name)));
         if (!server) continue;
-        if (!forward(net, dev.id, r.helperAddress, { protocol: 'udp', dstPort: 67, srcPort: 67 }).reached) continue;
-        if (!forward(net, server.id, r.ipAddress, { protocol: 'udp', dstPort: 67, srcPort: 67 }).reached) continue;
+        if (!forward(net, dev.id, r.helperAddress, { protocol: 'udp', dstPort: 67, srcPort: 67 }, { record: false }).reached) continue;
+        if (!forward(net, server.id, r.ipAddress, { protocol: 'udp', dstPort: 67, srcPort: 67 }, { record: false }).reached) continue;
         const pool = poolFor(server, r.ipAddress, r.subnetMask);
         if (pool) {
           offer = { server, pool, serverIp: r.helperAddress };
@@ -812,3 +1016,6 @@ export function routerMac(node: string, iface: string): string {
 export function nodeName(net: NetworkState, id: string): string {
   return net.hosts[id]?.name ?? net.devices[id]?.hostname ?? id;
 }
+
+// Keep the IPv6 helpers reachable for callers that only import this module.
+export { prefixMask6 };

@@ -1,4 +1,5 @@
 import { isExtendedNumber, nextSeq, parseExtendedRule, parseStandardRule } from '../acl';
+import { normalizeIpv6, parsePrefix6 } from '../ipv6';
 import { normalizeInterfaceName } from '../interfaces';
 import { fromSwitch, isSubinterface, syncLinkState, type NetworkState } from '../network';
 import { complete, help, resolve } from '../resolver';
@@ -229,6 +230,11 @@ function baseDevice(id: string, hostname: string, deviceType: DeviceState['devic
     dhcpPools: {},
     dhcpExcluded: [],
     dhcpBindings: [],
+    natStatic: [],
+    natPools: {},
+    natTranslations: [],
+    ipv6UnicastRouting: false,
+    staticRoutes6: [],
     users: [],
     lines: { con: { login: false }, vty: { login: false } },
     servicePasswordEncryption: false,
@@ -291,6 +297,10 @@ export interface RouterOptions {
   acls?: Record<string, { kind?: 'standard' | 'extended'; rules: string[] }>;
   /** Pre-configured DHCP pools and excluded ranges. */
   dhcp?: { pools?: Array<{ name: string; network: string; mask: string; defaultRouter?: string; dnsServer?: string; domainName?: string }>; excluded?: Array<[string, string?]> };
+  /** Pre-configured NAT. */
+  nat?: { static?: Array<[string, string]>; pools?: Array<{ name: string; start: string; end: string; netmask: string }>; dynamic?: { acl: string; pool?: string; interface?: string; overload?: boolean } };
+  /** IPv6 static routes as "prefix/len via" where via is a next hop, an interface, or "iface nexthop". */
+  ipv6?: { unicastRouting?: boolean; routes?: Array<[string, string]> };
   overrides?: Partial<DeviceState>;
 }
 
@@ -345,5 +355,20 @@ export function createRouter(options: RouterOptions = {}): DeviceState {
   }
   for (const p of options.dhcp?.pools ?? []) dev.dhcpPools[p.name] = { name: p.name, network: p.network, mask: p.mask, defaultRouter: p.defaultRouter, dnsServer: p.dnsServer, domainName: p.domainName };
   for (const [from, to] of options.dhcp?.excluded ?? []) dev.dhcpExcluded.push({ from, to: to ?? from });
+  for (const [insideLocal, insideGlobal] of options.nat?.static ?? []) dev.natStatic.push({ insideLocal, insideGlobal });
+  for (const p of options.nat?.pools ?? []) dev.natPools[p.name] = { ...p };
+  if (options.nat?.dynamic) {
+    const d = options.nat.dynamic;
+    dev.natDynamic = { acl: d.acl, pool: d.pool, interface: d.interface ? normalize(d.interface) : undefined, overload: d.overload ?? false };
+  }
+  if (options.ipv6?.unicastRouting) dev.ipv6UnicastRouting = true;
+  for (const [prefixText, via] of options.ipv6?.routes ?? []) {
+    const p = parsePrefix6(prefixText);
+    if (!p) throw new Error(`Bad IPv6 prefix ${prefixText}`);
+    const parts = via.trim().split(/\s+/);
+    const first = normalizeIpv6(parts[0]);
+    if (first && parts.length === 1) dev.staticRoutes6.push({ prefix: p.address, length: p.length, nextHop: first, adminDistance: 1 });
+    else dev.staticRoutes6.push({ prefix: p.address, length: p.length, exitInterface: normalize(parts[0]), nextHop: parts[1] ? normalizeIpv6(parts[1]) ?? undefined : undefined, adminDistance: 1 });
+  }
   return { ...dev, ...options.overrides };
 }

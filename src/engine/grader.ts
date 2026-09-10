@@ -1,6 +1,7 @@
 import { normalizeInterfaceName } from './interfaces';
+import { isIpv6, normalizeIpv6, parsePrefix6 } from './ipv6';
 import { renderConfigBody } from './ios/show';
-import { ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, type NetworkState, type RouteEntry } from './network';
+import { ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, type NetworkState, type RouteEntry } from './network';
 import type { AclAddr, AclEntry, AclProtocol, CliErrorKind, DeviceState, LineState, Mode, PortMode } from './types';
 
 interface Base {
@@ -72,6 +73,15 @@ export type Check = Base &
     | { type: 'helper-address'; interface: string; address: string }
     /** Host settings (device = host id). `viaDhcp` requires a live lease. */
     | { type: 'host-config'; ip?: string; mask?: string; gateway?: string; dns?: string; viaDhcp?: boolean; inSubnet?: { network: string; mask: string } }
+    | { type: 'nat-role'; interface: string; role: 'inside' | 'outside' }
+    | { type: 'nat-static'; local: string; global: string }
+    | { type: 'nat-pool'; name: string; start?: string; end?: string }
+    | { type: 'nat-dynamic'; acl?: string; pool?: string; interface?: string; overload?: boolean }
+    | { type: 'nat-translations'; min: number }
+    | { type: 'ipv6-unicast-routing' }
+    /** An interface carries the given global address/prefix (any spelling), optionally by EUI-64, or the given manual link-local. */
+    | { type: 'ipv6-address'; interface: string; address?: string; prefix?: number; eui64?: boolean; linkLocal?: string }
+    | { type: 'route6'; prefix: string; via?: string }
   );
 
 export interface Objective {
@@ -179,6 +189,22 @@ function describe(check: Check): string {
       return `${check.interface} relays DHCP to ${check.address}${on}`;
     case 'host-config':
       return `${check.device ?? 'Host'} has ${check.viaDhcp ? 'a DHCP lease' : 'the expected IP settings'}${check.ip ? ` (${check.ip})` : ''}`;
+    case 'nat-role':
+      return `${check.interface} is ip nat ${check.role}${on}`;
+    case 'nat-static':
+      return `Static NAT ${check.local} -> ${check.global}${on}`;
+    case 'nat-pool':
+      return `NAT pool ${check.name}${check.start ? ` ${check.start}-${check.end}` : ''}${on}`;
+    case 'nat-dynamic':
+      return `${check.overload ? 'PAT' : 'Dynamic NAT'}${check.acl ? ` for list ${check.acl}` : ''}${check.pool ? ` using pool ${check.pool}` : check.interface ? ` using ${check.interface}` : ''}${on}`;
+    case 'nat-translations':
+      return `At least ${check.min} NAT translation${check.min === 1 ? '' : 's'}${on}`;
+    case 'ipv6-unicast-routing':
+      return `ipv6 unicast-routing is enabled${on}`;
+    case 'ipv6-address':
+      return check.linkLocal ? `${check.interface} has link-local ${check.linkLocal}${on}` : `${check.interface} has ${check.address ?? 'an IPv6 address'}${check.prefix ? `/${check.prefix}` : ''}${check.eui64 ? ' (EUI-64)' : ''}${on}`;
+    case 'route6':
+      return `IPv6 route ${check.prefix}${check.via ? ` via ${check.via}` : ''}${on}`;
   }
 }
 
@@ -220,7 +246,8 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
   if (check.type === 'ping') {
     const id = check.device ?? net.primary;
     const pings = net.devices[id]?.pings ?? net.hosts[id]?.pings ?? [];
-    return pings.some((p) => p.target === check.target && (check.success === undefined || p.success === check.success) && (check.denied === undefined || Boolean(p.denied) === check.denied));
+    const target = isIpv6(check.target) ? normalizeIpv6(check.target) : check.target;
+    return pings.some((p) => p.target === target && (check.success === undefined || p.success === check.success) && (check.denied === undefined || Boolean(p.denied) === check.denied));
   }
   if (check.type === 'command' && check.device && net.hosts[check.device]) {
     const re = new RegExp(check.pattern, 'i');
@@ -383,6 +410,45 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
       const name = normalizeInterfaceName(check.interface);
       const i = name ? state.interfaces[name] : undefined;
       return i?.helperAddress === check.address;
+    }
+    case 'nat-role': {
+      const name = normalizeInterfaceName(check.interface);
+      return Boolean(name) && state.interfaces[name!]?.natRole === check.role;
+    }
+    case 'nat-static':
+      return state.natStatic.some((s) => s.insideLocal === check.local && s.insideGlobal === check.global);
+    case 'nat-pool': {
+      const p = state.natPools[check.name];
+      return Boolean(p) && (check.start === undefined || p.start === check.start) && (check.end === undefined || p.end === check.end);
+    }
+    case 'nat-dynamic': {
+      const d = state.natDynamic;
+      if (!d) return false;
+      if (check.acl !== undefined && d.acl !== check.acl) return false;
+      if (check.pool !== undefined && d.pool !== check.pool) return false;
+      if (check.interface !== undefined && d.interface !== normalizeInterfaceName(check.interface)) return false;
+      if (check.overload !== undefined && d.overload !== check.overload) return false;
+      return true;
+    }
+    case 'nat-translations':
+      return state.natTranslations.length >= check.min;
+    case 'ipv6-unicast-routing':
+      return state.ipv6UnicastRouting;
+    case 'ipv6-address': {
+      const name = normalizeInterfaceName(check.interface);
+      const i = name ? state.interfaces[name] : undefined;
+      if (!i?.ipv6) return false;
+      if (check.linkLocal !== undefined) return i.ipv6.linkLocal === normalizeIpv6(check.linkLocal);
+      const want = check.address ? normalizeIpv6(check.address) : undefined;
+      const addrs = ifaceIpv6(state, i).global;
+      return addrs.some((a) => (want === undefined || a.address === want) && (check.prefix === undefined || a.prefix === check.prefix) && (check.eui64 === undefined || Boolean(i.ipv6!.addresses.find((x) => x.address === a.address)?.eui64) === check.eui64));
+    }
+    case 'route6': {
+      const p = parsePrefix6(check.prefix);
+      if (!p) return false;
+      const viaAddr = check.via ? normalizeIpv6(check.via) : null;
+      const viaIface = check.via && !viaAddr ? normalizeInterfaceName(check.via) : null;
+      return state.staticRoutes6.some((r) => r.prefix === p.address && r.length === p.length && (check.via === undefined || (viaAddr !== null && r.nextHop === viaAddr) || (viaIface !== null && r.exitInterface === viaIface)));
     }
   }
 }

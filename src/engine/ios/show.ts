@@ -1,7 +1,8 @@
 import type { Acl, DeviceState, InterfaceState } from '../types';
 import { compareInterfaceNames, isSvi, shortInterfaceName } from '../interfaces';
-import { isLoopback, isSubinterface, type MacEntry, type OspfInterfaceInfo, type OspfNeighbor, type RouteEntry } from '../network';
+import { ifaceIpv6, isLoopback, isSubinterface, type MacEntry, type OspfInterfaceInfo, type OspfNeighbor, type RouteEntry, type RouteEntry6 } from '../network';
 import { ruleText } from '../acl';
+import { networkAddress6 } from '../ipv6';
 import { classfulNetwork, ipToInt, prefixLength } from './net';
 
 export const IOS_VERSION = '15.2(7)E8';
@@ -117,7 +118,7 @@ function renderRouterConfigBody(state: DeviceState): string[] {
   out.push('no aaa new-model', '!');
   if (state.ipDomainName) out.push(`ip domain-name ${state.ipDomainName}`, '!');
   if (state.sshVersion) out.push(`ip ssh version ${state.sshVersion}`, '!');
-  out.push('ip cef', 'no ipv6 cef', '!');
+  out.push('ip cef', state.ipv6UnicastRouting ? 'ipv6 unicast-routing' : 'no ipv6 cef', '!');
   if (!state.ipRouting) out.push('no ip routing', '!');
   for (const r of state.dhcpExcluded) out.push(`ip dhcp excluded-address ${r.from}${r.to !== r.from ? ` ${r.to}` : ''}`);
   if (state.dhcpExcluded.length) out.push('!');
@@ -137,6 +138,12 @@ function renderRouterConfigBody(state: DeviceState): string[] {
     if (i.helperAddress) out.push(` ip helper-address ${i.helperAddress}`);
     if (i.aclIn) out.push(` ip access-group ${i.aclIn} in`);
     if (i.aclOut) out.push(` ip access-group ${i.aclOut} out`);
+    if (i.natRole) out.push(` ip nat ${i.natRole}`);
+    if (i.ipv6) {
+      if (i.ipv6.linkLocal) out.push(` ipv6 address ${i.ipv6.linkLocal} link-local`);
+      for (const a of i.ipv6.addresses) out.push(a.eui64 ? ` ipv6 address ${networkAddress6(a.address, a.prefix)}/${a.prefix} eui-64` : ` ipv6 address ${a.address}/${a.prefix}`);
+      if (i.ipv6.enabled && i.ipv6.addresses.length === 0 && !i.ipv6.linkLocal) out.push(' ipv6 enable');
+    }
     if (i.ospfArea !== undefined && state.ospf) out.push(` ip ospf ${state.ospf.processId} area ${i.ospfArea}`);
     if (i.ospfCost !== undefined) out.push(` ip ospf cost ${i.ospfCost}`);
     if (i.ospfPriority !== undefined) out.push(` ip ospf priority ${i.ospfPriority}`);
@@ -162,8 +169,93 @@ function renderRouterConfigBody(state: DeviceState): string[] {
     out.push(`ip route ${r.destination} ${r.mask} ${via}${r.adminDistance !== 1 ? ` ${r.adminDistance}` : ''}`);
   }
   if (state.staticRoutes.length) out.push('!');
+  for (const p of Object.values(state.natPools)) out.push(`ip nat pool ${p.name} ${p.start} ${p.end} netmask ${p.netmask}`);
+  if (state.natDynamic) {
+    const d = state.natDynamic;
+    out.push(`ip nat inside source list ${d.acl} ${d.interface ? `interface ${d.interface}` : `pool ${d.pool}`}${d.overload ? ' overload' : ''}`);
+  }
+  for (const s of state.natStatic) out.push(`ip nat inside source static ${s.insideLocal} ${s.insideGlobal}`);
+  if (Object.keys(state.natPools).length || state.natDynamic || state.natStatic.length) out.push('!');
+  for (const r of state.staticRoutes6) out.push(`ipv6 route ${r.prefix}/${r.length} ${r.exitInterface ? `${r.exitInterface}${r.nextHop ? ` ${r.nextHop}` : ''}` : r.nextHop}`);
+  if (state.staticRoutes6.length) out.push('!');
   pushAclConfig(state, out);
   pushTail(state, out);
+  return out;
+}
+
+export function showIpNatTranslations(state: DeviceState): string[] {
+  const out = ['Pro  Inside global         Inside local          Outside local         Outside global'];
+  const col = (s: string) => s.padEnd(22);
+  for (const s of state.natStatic) out.push(`---  ${col(s.insideGlobal)}${col(s.insideLocal)}${col('---')}---`);
+  for (const t of state.natTranslations) {
+    if (t.proto === '---') {
+      out.push(`---  ${col(t.insideGlobal)}${col(t.insideLocal)}${col('---')}---`);
+      continue;
+    }
+    const ig = `${t.insideGlobal}:${t.insideGlobalPort ?? ''}`;
+    const il = `${t.insideLocal}:${t.insideLocalPort ?? ''}`;
+    const og = `${t.outsideGlobal ?? '---'}:${t.outsidePort ?? ''}`;
+    out.push(`${t.proto.padEnd(5)}${col(ig)}${col(il)}${col(og)}${og}`);
+  }
+  return out.length === 1 ? [] : out;
+}
+
+export function showIpNatStatistics(state: DeviceState): string[] {
+  const dynamic = state.natTranslations.filter((t) => !t.static).length;
+  const extended = state.natTranslations.filter((t) => t.proto !== '---').length;
+  const out = [`Total active translations: ${state.natStatic.length + state.natTranslations.length} (${state.natStatic.length} static, ${dynamic} dynamic; ${extended} extended)`];
+  const outside = Object.values(state.interfaces).filter((i) => i.natRole === 'outside').map((i) => i.name);
+  const inside = Object.values(state.interfaces).filter((i) => i.natRole === 'inside').map((i) => i.name);
+  out.push('Outside interfaces:', ...(outside.length ? outside.map((n) => `  ${n}`) : ['  (none)']), 'Inside interfaces:', ...(inside.length ? inside.map((n) => `  ${n}`) : ['  (none)']));
+  out.push(`Hits: ${state.natTranslations.length * 5}  Misses: 0`, 'Dynamic mappings:', '-- Inside Source');
+  if (state.natDynamic) {
+    const d = state.natDynamic;
+    out.push(`[Id: 1] access-list ${d.acl} ${d.interface ? `interface ${d.interface}` : `pool ${d.pool}`} refcount ${dynamic}`);
+    if (d.pool && state.natPools[d.pool]) {
+      const p = state.natPools[d.pool];
+      out.push(` pool ${p.name}: netmask ${p.netmask}`, `\tstart ${p.start} end ${p.end}`, `\ttype generic, total addresses ${(ipToInt(p.end) ?? 0) - (ipToInt(p.start) ?? 0) + 1}, allocated ${new Set(state.natTranslations.filter((t) => !t.static).map((t) => t.insideGlobal)).size}`);
+    }
+  }
+  return out;
+}
+
+export function showIpv6InterfaceBrief(state: DeviceState): string[] {
+  const out: string[] = [];
+  for (const i of sortedInterfaces(state)) {
+    if (isSvi(i.name)) continue;
+    const status = i.shutdown ? 'administratively down/down' : i.connected ? 'up/up' : 'down/down';
+    out.push(`${i.name.padEnd(23)}[${status}]`);
+    const v6 = ifaceIpv6(state, i);
+    if (!v6.linkLocal) {
+      out.push('    unassigned');
+      continue;
+    }
+    out.push(`    ${v6.linkLocal}`);
+    for (const a of v6.global) out.push(`    ${a.address}`);
+  }
+  return out;
+}
+
+export function showIpv6Route(entries: RouteEntry6[]): string[] {
+  const out = [
+    `IPv6 Routing Table - default - ${entries.length + 1} entries`,
+    'Codes: C - Connected, L - Local, S - Static, U - Per-user Static route',
+    '       B - BGP, R - RIP, H - NHRP, I1 - ISIS L1',
+    '       I2 - ISIS L2, IA - ISIS interarea, IS - ISIS summary, D - EIGRP',
+    '       EX - EIGRP external, ND - ND Default, NDp - ND Prefix, DCE - Destination',
+    '       NDr - Redirect, O - OSPF Intra, OI - OSPF Inter, OE1 - OSPF ext 1',
+    '       OE2 - OSPF ext 2, ON1 - OSPF NSSA ext 1, ON2 - OSPF NSSA ext 2',
+  ];
+  const code = (e: RouteEntry6) => (e.source === 'connected' ? 'C' : e.source === 'local' ? 'L' : 'S');
+  for (const e of entries) {
+    out.push(`${code(e).padEnd(4)}${e.prefix}/${e.length} [${e.adminDistance}/0]`);
+    if (e.source === 'connected') out.push(`     via ${e.exitInterface}, directly connected`);
+    else if (e.source === 'local') out.push(`     via ${e.exitInterface}, receive`);
+    else if (e.nextHop && e.exitInterface && e.nextHop.toUpperCase().startsWith('FE80')) out.push(`     via ${e.nextHop}, ${e.exitInterface}`);
+    else if (e.nextHop) out.push(`     via ${e.nextHop}`);
+    else out.push(`     via ${e.exitInterface}, directly connected`);
+  }
+  out.push('L   FF00::/8 [0/0]', '     via Null0, receive');
   return out;
 }
 

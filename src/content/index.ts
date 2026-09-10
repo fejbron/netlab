@@ -7,6 +7,8 @@ import { learnRoutingLabs } from './labs/learn-routing';
 import { learnOspfLabs } from './labs/learn-ospf';
 import { learnAclLabs } from './labs/learn-acls';
 import { learnDhcpLabs } from './labs/learn-dhcp';
+import { learnNatLabs } from './labs/learn-nat';
+import { learnIpv6Labs } from './labs/learn-ipv6';
 import { ccnaExamLabs } from './labs/ccna-exams';
 
 export type { Lab, Module, Difficulty } from './types';
@@ -19,10 +21,12 @@ export const modules: Module[] = [
   { id: 'learn-ospf', order: 5, title: 'Learn OSPF', description: 'Let routers discover each other and exchange routes with single-area OSPF.' },
   { id: 'learn-acls', order: 6, title: 'Learn ACLs', description: 'Filter traffic with standard and extended access lists and protect management access.' },
   { id: 'learn-dhcp', order: 7, title: 'Learn DHCP', description: 'Hand out addresses from a router, relay across the network, and troubleshoot leases.' },
-  { id: 'ccna-exams', order: 8, title: 'CCNA Exams', description: 'Multi-device capstone exams that combine switching, routing, OSPF, ACLs, DHCP, troubleshooting and hardening.' },
+  { id: 'learn-nat', order: 8, title: 'Learn NAT', description: 'Publish a server with static NAT and share one public address with PAT.' },
+  { id: 'learn-ipv6', order: 9, title: 'Learn IPv6', description: 'Address interfaces with global and link-local IPv6, then route between IPv6 networks.' },
+  { id: 'ccna-exams', order: 10, title: 'CCNA Exams', description: 'Multi-device capstone exams that combine switching, routing, OSPF, ACLs, DHCP, NAT, IPv6, troubleshooting and hardening.' },
 ];
 
-export const labs: Lab[] = [...meetTheCliLabs, ...learnSwitchingLabs, ...secureTheSwitchLabs, ...learnRoutingLabs, ...learnOspfLabs, ...learnAclLabs, ...learnDhcpLabs, ...ccnaExamLabs].sort((a, b) => {
+export const labs: Lab[] = [...meetTheCliLabs, ...learnSwitchingLabs, ...secureTheSwitchLabs, ...learnRoutingLabs, ...learnOspfLabs, ...learnAclLabs, ...learnDhcpLabs, ...learnNatLabs, ...learnIpv6Labs, ...ccnaExamLabs].sort((a, b) => {
   const ma = modules.find((m) => m.id === a.moduleId)?.order ?? 0;
   const mb = modules.find((m) => m.id === b.moduleId)?.order ?? 0;
   return ma - mb || a.order - b.order;

@@ -23,7 +23,7 @@ function layout(network: NetworkState, width: number): NodeBox[] {
     rows[row].push({ id: d.id, title: d.hostname, subtitle: d.deviceType.toUpperCase(), detail: '', kind: d.deviceType, x: 0, y: 0 });
   }
   for (const h of Object.values(network.hosts)) {
-    rows[2].push({ id: h.id, title: h.name, subtitle: h.deviceKind.toUpperCase(), detail: h.ip ?? (h.dhcp ? 'DHCP' : ''), kind: 'host', x: 0, y: 0 });
+    rows[2].push({ id: h.id, title: h.name, subtitle: h.deviceKind.toUpperCase(), detail: h.ip ?? h.ip6 ?? (h.dhcp ? 'DHCP' : ''), kind: 'host', x: 0, y: 0 });
   }
   const present = rows.filter((r) => r.length > 0);
   const rowHeight = 90;
@@ -163,7 +163,11 @@ export default function Topology({ network, active, onSelect }: Props) {
                   return (
                     <tr key={i.name} className="border-t border-border/60">
                       <td className="py-1 text-fg-bright">{shortInterfaceName(i.name)}</td>
-                      <td className="py-1">{i.ipAddress ? `${i.ipAddress}` : '—'}{i.encapsulation ? <span className="text-muted"> dot1q {i.encapsulation.vlan}</span> : null}</td>
+                      <td className="py-1">
+                        {i.ipAddress ? `${i.ipAddress}` : i.ipv6?.addresses[0] ? `${i.ipv6.addresses[0].address}/${i.ipv6.addresses[0].prefix}` : '—'}
+                        {i.encapsulation ? <span className="text-muted"> dot1q {i.encapsulation.vlan}</span> : null}
+                        {i.natRole ? <span className="text-muted"> nat {i.natRole}</span> : null}
+                      </td>
                       <td className={`py-1 ${color}`}>● {status}</td>
                     </tr>
                   );
@@ -195,6 +199,16 @@ export default function Topology({ network, active, onSelect }: Props) {
             <dd className="text-fg-bright">{host.mask ?? '—'}</dd>
             <dt className="text-muted">Gateway</dt>
             <dd className="text-fg-bright">{host.gateway ?? '—'}</dd>
+            {host.ip6 && (
+              <>
+                <dt className="text-muted">IPv6</dt>
+                <dd className="text-fg-bright">
+                  {host.ip6}/{host.prefix6}
+                </dd>
+                <dt className="text-muted">Gateway v6</dt>
+                <dd className="text-fg-bright">{host.gateway6 ?? '—'}</dd>
+              </>
+            )}
             {host.dns && (
               <>
                 <dt className="text-muted">DNS</dt>

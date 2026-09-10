@@ -11,5 +11,9 @@ export { buildNetwork, fromSwitch, isNetworkState, ping, traceroute, routingTabl
 export type { NetworkState, HostState, HostSpec, NetworkSpec, Link, Endpoint, RouteEntry, PingResult, Hop, OspfNeighbor, OspfInterfaceInfo, AclDenial, AclHit, DhcpResult } from './network';
 export { evaluateAcl, parseStandardRule, parseExtendedRule, ruleText } from './acl';
 export type { Packet } from './acl';
+export { routingTable6, lookupRoute6, ifaceIpv6, hostLinkLocal } from './network';
+export type { RouteEntry6, Ipv6Addresses } from './network';
+export { parseIpv6, formatIpv6, normalizeIpv6, isIpv6, parsePrefix6, sameSubnet6, networkAddress6, eui64Address, linkLocalFromMac, ipv6Config, isLinkLocal6 } from './ipv6';
+export { translateSource, translateDestination, natOwnsAddress } from './nat';
 export { executeHost, hostPrompt } from './host';
 export type { HostExecResult } from './host';

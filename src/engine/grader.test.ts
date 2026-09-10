@@ -114,6 +114,19 @@ describe('reference solutions pass', () => {
       'ip access-list extended HR-POLICY', 'permit udp 192.168.20.0 0.0.0.255 host 10.10.10.10 eq 53', 'deny ip 192.168.20.0 0.0.0.255 host 10.10.10.10', 'permit ip any any', 'int g0/0.20', 'ip access-group HR-POLICY in', 'exit', 'access-list 5 permit host 192.168.10.10', 'line vty 0 4', 'access-class 5 in', 'end', 'write memory',
       'PC-A: ipconfig /renew', 'PC-B: ipconfig /renew', 'PC-A: ping 10.10.10.10', 'PC-A: ping 192.168.20.10', 'PC-B: ping 192.168.10.10', 'PC-B: ping 10.10.10.10',
     ],
+    'nat-01-static-nat': ['NET-PC: ping 203.0.113.10', 'en', 'conf t', 'ip nat inside source static 192.168.10.20 203.0.113.10', 'int g0/0', 'ip nat inside', 'int g0/1', 'ip nat outside', 'end', 'NET-PC: ping 203.0.113.10', 'show ip nat translations'],
+    'nat-02-pat-overload': ['PC-A: ping 8.8.8.8', 'en', 'conf t', 'access-list 1 permit 192.168.10.0 0.0.0.255', 'ip nat inside source list 1 interface g0/1 overload', 'int g0/0', 'ip nat inside', 'int g0/1', 'ip nat outside', 'end', 'PC-A: ping 8.8.8.8', 'PC-B: ping 8.8.8.8', 'show ip nat translations'],
+    'nat-03-dynamic-pool': ['en', 'conf t', 'ip nat pool PUBLIC 203.0.113.20 203.0.113.21 netmask 255.255.255.0', 'access-list 1 permit 192.168.10.0 0.0.0.255', 'ip nat inside source list 1 pool PUBLIC', 'end', 'PC-A: ping 8.8.8.8', 'PC-B: ping 8.8.8.8', 'SRV1: ping 8.8.8.8', 'conf t', 'ip nat inside source list 1 pool PUBLIC overload', 'end', 'SRV1: ping 8.8.8.8'],
+    'nat-04-exam-internet-edge': ['en', 'conf t', 'ip nat inside source static 192.168.10.20 203.0.113.10', 'access-list 1 permit 192.168.10.0 0.0.0.255', 'ip nat inside source list 1 interface g0/1 overload', 'int g0/0', 'ip nat inside', 'int g0/1', 'ip nat outside', 'end', 'write memory', 'NET-PC: ping 203.0.113.10', 'PC-A: ping 8.8.8.8', 'PC-B: ping 8.8.8.8'],
+    'v6-01-first-addresses': ['en', 'conf t', 'ipv6 unicast-routing', 'int g0/0', 'ipv6 address 2001:db8:1::1/64', 'no shutdown', 'end', 'show ipv6 interface brief', 'ping 2001:db8:1::10'],
+    'v6-02-eui64-link-local': ['en', 'conf t', 'int g0/1', 'ipv6 address 2001:db8:12::/64 eui-64', 'ipv6 address fe80::1 link-local', 'no shutdown', 'end', 'show ipv6 interface brief', 'ping 2001:db8:12::2'],
+    'v6-03-static-routes': ['PC-A: ping 2001:db8:2::10', 'en', 'conf t', 'ipv6 route 2001:db8:2::/64 2001:db8:12::2', 'end', 'show ipv6 route', 'PC-A: ping 2001:db8:2::10'],
+    'v6-04-default-via-link-local': ['en', 'conf t', 'ipv6 route ::/0 fe80::2', 'ipv6 route ::/0 g0/1 fe80::2', 'end', 'show ipv6 route', 'PC-A: ping 2001:db8:ffff::1'],
+    'v6-05-exam-dual-stack': [
+      'en', 'conf t', 'ipv6 unicast-routing', 'int g0/0', 'ipv6 address 2001:db8:1::1/64', 'int g0/1', 'ipv6 address 2001:db8:12::1/64', 'exit', 'ipv6 route 2001:db8:2::/64 2001:db8:12::2', 'end', 'write memory',
+      'R2: en', 'R2: conf t', 'R2: ipv6 unicast-routing', 'R2: int g0/0', 'R2: ipv6 address 2001:db8:2::1/64', 'R2: int g0/1', 'R2: ipv6 address 2001:db8:12::2/64', 'R2: exit', 'R2: ipv6 route 2001:db8:1::/64 2001:db8:12::1', 'R2: end', 'R2: write memory',
+      'PC-A: ping 2001:db8:2::10', 'PC-B: ping 2001:db8:1::10', 'PC-A: ping 192.168.2.10',
+    ],
   };
 
   it('covers every lab', () => {

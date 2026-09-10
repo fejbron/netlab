@@ -2,8 +2,17 @@
  * A minimal PC terminal: ipconfig (with /all, /renew and /release), ping and tracert
  * with Windows-style output.
  */
-import { applyAclHits, dhcpRelease, dhcpRequest, ping, type HostState, type NetworkState, nodeName } from './network';
+import { applyAclHits, dhcpRelease, dhcpRequest, hostLinkLocal, ping, type HostState, type NetworkState, nodeName } from './network';
 import { isValidIp } from './ios/net';
+import { isIpv6, normalizeIpv6 } from './ipv6';
+
+function isAddress(text: string): boolean {
+  return isValidIp(text) || isIpv6(text);
+}
+
+function canon(text: string): string {
+  return isIpv6(text) ? normalizeIpv6(text)! : text;
+}
 
 export interface HostExecResult {
   network: NetworkState;
@@ -25,7 +34,11 @@ function ipconfig(h: HostState, all: boolean): string[] {
   if (all) {
     out.push('   Description . . . . . . . . . . . : Simulated Gigabit Ethernet', `   Physical Address. . . . . . . . . : ${macText(h)}`, `   DHCP Enabled. . . . . . . . . . . : ${h.dhcp ? 'Yes' : 'No'}`, '   Autoconfiguration Enabled . . . . : Yes');
   }
-  out.push(`   IPv4 Address. . . . . . . . . . . : ${h.ip ?? '(none)'}`, `   Subnet Mask . . . . . . . . . . . : ${h.mask ?? '(none)'}`, `   Default Gateway . . . . . . . . . : ${h.gateway ?? ''}`);
+  if (h.ip6) out.push(`   IPv6 Address. . . . . . . . . . . : ${h.ip6}`);
+  out.push(`   Link-local IPv6 Address . . . . . : ${hostLinkLocal(h)}%3`);
+  out.push(`   IPv4 Address. . . . . . . . . . . : ${h.ip ?? '(none)'}`, `   Subnet Mask . . . . . . . . . . . : ${h.mask ?? '(none)'}`);
+  out.push(`   Default Gateway . . . . . . . . . : ${h.gateway6 ?? h.gateway ?? ''}`);
+  if (h.gateway6 && h.gateway) out.push(`                                       ${h.gateway}`);
   if (all) {
     if (h.dhcp && h.dhcpServer) out.push(`   DHCP Server . . . . . . . . . . . : ${h.dhcpServer}`);
     out.push(`   DNS Servers . . . . . . . . . . . : ${h.dns ?? ''}`);
@@ -46,15 +59,17 @@ function release(network: NetworkState, h: HostState): string[] {
   return ipconfig(h, false);
 }
 
-function pingOut(network: NetworkState, h: HostState, target: string): string[] {
-  if (!isValidIp(target)) return [`Ping request could not find host ${target}. Please check the name and try again.`];
+function pingOut(network: NetworkState, h: HostState, rawTarget: string): string[] {
+  if (!isAddress(rawTarget)) return [`Ping request could not find host ${rawTarget}. Please check the name and try again.`];
+  const target = canon(rawTarget);
   const r = ping(network, h.id, target);
   applyAclHits(network, r.hits);
   h.pings.push({ target, success: r.success, ...(r.denied ? { denied: true } : {}) });
   if (!r.success && (r.reason === 'no ip address' || r.reason === 'no gateway')) return ['PING: transmit failed. General failure.'];
   const routerHops = Math.max(0, r.hops.length - 1);
   const ttl = 128 - routerHops;
-  const reply = r.success ? `Reply from ${target}: bytes=32 time<1ms TTL=${ttl}` : r.denied ? `Reply from ${r.denied.ip ?? 'router'}: Destination net unreachable.` : 'Request timed out.';
+  const v6 = isIpv6(target);
+  const reply = r.success ? (v6 ? `Reply from ${target}: time<1ms` : `Reply from ${target}: bytes=32 time<1ms TTL=${ttl}`) : r.denied ? `Reply from ${r.denied.ip ?? 'router'}: Destination net unreachable.` : 'Request timed out.';
   const received = r.success ? 4 : 0;
   const lost = r.success ? 0 : r.denied ? 0 : 4;
   return [
@@ -67,8 +82,9 @@ function pingOut(network: NetworkState, h: HostState, target: string): string[] 
   ];
 }
 
-function tracert(network: NetworkState, h: HostState, target: string): string[] {
-  if (!isValidIp(target)) return [`Unable to resolve target system name ${target}.`];
+function tracert(network: NetworkState, h: HostState, rawTarget: string): string[] {
+  if (!isAddress(rawTarget)) return [`Unable to resolve target system name ${rawTarget}.`];
+  const target = canon(rawTarget);
   const r = ping(network, h.id, target);
   const out = [`Tracing route to ${target} over a maximum of 30 hops`, ''];
   r.hops.forEach((hop, i) => out.push(`  ${String(i + 1).padStart(2)}    <1 ms    <1 ms    <1 ms  ${hop.ip ?? nodeName(network, hop.node)}`));

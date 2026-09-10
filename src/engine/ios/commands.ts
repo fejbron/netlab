@@ -2,12 +2,18 @@ import type { CommandDef } from '../resolver';
 import type { Acl, DeviceState, DeviceType, InterfaceState, Mode } from '../types';
 import { isSvi, normalizeInterfaceName, shortInterfaceName, sviVlanId } from '../interfaces';
 import { isExtendedNumber, isStandardNumber, nextSeq, parseExtendedRule, parseStandardRule } from '../acl';
-import { applyAclHits, isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, routingTable, type NetworkState } from '../network';
+import { eui64Address, isIpv6, isLinkLocal6, normalizeIpv6, parsePrefix6 } from '../ipv6';
+import { clearTranslations } from '../nat';
+import { applyAclHits, isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, routerMac, routingTable, routingTable6, type NetworkState } from '../network';
 import { intToIp, ipToInt, isValidIp, isValidMask, networkAddress, parseVlanList } from './net';
 import {
   defaultVlanName,
   renderConfigBody,
   showAccessLists,
+  showIpNatStatistics,
+  showIpNatTranslations,
+  showIpv6InterfaceBrief,
+  showIpv6Route,
   showHistory,
   showInterfaceSwitchport,
   showInterfacesStatus,
@@ -145,6 +151,19 @@ export const WORD_HELP: Record<string, string> = {
   'helper-address': 'Specify a destination address for UDP broadcasts',
   binding: 'DHCP address bindings',
   lease: 'Address lease time',
+  nat: 'NAT configuration commands',
+  inside: 'Inside address translation',
+  outside: 'Outside address translation',
+  source: 'Source address translation',
+  list: 'Specify access list describing local addresses',
+  overload: 'Overload an address translation',
+  netmask: 'Specify the network mask',
+  translations: 'Translation entries',
+  statistics: 'Translation statistics',
+  ipv6: 'Global IPv6 configuration commands',
+  'unicast-routing': 'Enable unicast routing',
+  'eui-64': 'Use eui-64 interface identifier',
+  'link-local': 'Use link-local address',
 };
 
 // ---------------------------------------------------------------------------
@@ -295,8 +314,9 @@ function enterLine(state: DeviceState, line: 'con' | 'vty') {
   state.currentVlan = undefined;
 }
 
-function pingCommand({ state, network, nodeId }: Ctx, target: string): string[] {
-  if (!isValidIp(target)) return ['% Unrecognized host or address, or protocol not running.'];
+function pingCommand({ state, network, nodeId }: Ctx, rawTarget: string): string[] {
+  if (!isValidIp(rawTarget) && !isIpv6(rawTarget)) return ['% Unrecognized host or address, or protocol not running.'];
+  const target = isIpv6(rawTarget) ? normalizeIpv6(rawTarget)! : rawTarget;
   const result = netPing(network, nodeId, target);
   applyAclHits(network, result.hits);
   state.pings.push({ target, success: result.success, ...(result.denied ? { denied: true } : {}) });
@@ -308,8 +328,9 @@ function pingCommand({ state, network, nodeId }: Ctx, target: string): string[] 
   ];
 }
 
-function tracerouteCommand({ network, nodeId }: Ctx, target: string): string[] {
-  if (!isValidIp(target)) return ['% Unrecognized host or address, or protocol not running.'];
+function tracerouteCommand({ network, nodeId }: Ctx, rawTarget: string): string[] {
+  if (!isValidIp(rawTarget) && !isIpv6(rawTarget)) return ['% Unrecognized host or address, or protocol not running.'];
+  const target = isIpv6(rawTarget) ? normalizeIpv6(rawTarget)! : rawTarget;
   const result = netPing(network, nodeId, target);
   const out = ['Type escape sequence to abort.', `Tracing the route to ${target}`, 'VRF info: (vrf in name/id, vrf out name/id)'];
   result.hops.forEach((h, i) => out.push(`  ${String(i + 1).padStart(2)} ${h.ip ?? nodeName(network, h.node)} 1 msec 1 msec 2 msec`));
@@ -523,6 +544,11 @@ const SHOW_ROUTER_USER: Def[] = [
   { pattern: 'show ip access-lists <name>', help: 'Access list name or number', run: ({ state }, a) => (state.acls[a.name] ? showAccessLists([state.acls[a.name]]) : []) },
   { pattern: 'show ip dhcp binding', help: 'DHCP address bindings', run: ({ state }) => showIpDhcpBinding(state) },
   { pattern: 'show ip dhcp pool', help: 'DHCP pool information', run: ({ state }) => showIpDhcpPool(state) },
+  { pattern: 'show ip nat translations', help: 'Translation entries', run: ({ state }) => showIpNatTranslations(state) },
+  { pattern: 'show ip nat statistics', help: 'Translation statistics', run: ({ state }) => showIpNatStatistics(state) },
+  { pattern: 'show ipv6 interface brief', help: 'Brief summary of IPv6 status and configuration', run: ({ state }) => showIpv6InterfaceBrief(state) },
+  { pattern: 'show ipv6 route', help: 'IPv6 routing table', run: ({ network, nodeId }) => showIpv6Route(routingTable6(network, nodeId)) },
+  { pattern: 'show ipv6 route static', help: 'Static routes', run: ({ network, nodeId }) => showIpv6Route(routingTable6(network, nodeId).filter((e) => e.source === 'static')) },
   {
     pattern: 'show ip interface <interface>',
     help: 'IP interface status and configuration',
@@ -594,6 +620,8 @@ function privExec(show: Def[]): Def[] {
     { pattern: 'copy running-config startup-config', help: 'Copy from current system configuration', run: ({ state }) => ['Destination filename [startup-config]? ', ...saveConfig(state)] },
     { pattern: 'erase startup-config', help: 'Erase contents of configuration memory', run: ({ state }) => { state.startupConfig = null; return ['Erasing the nvram filesystem will remove all configuration files! Continue? [confirm]', '[OK]', 'Erase of nvram: complete']; } },
     { pattern: 'clear mac address-table dynamic', help: 'dynamic entry type', run: () => undefined },
+    { pattern: 'clear ip nat translation *', help: 'Delete all dynamic translations', run: ({ state }) => void clearTranslations(state) },
+    { pattern: 'clear ip nat translation', help: 'Delete all dynamic translations', run: ({ state }) => void clearTranslations(state) },
     { pattern: 'terminal length <lines>', help: 'Set number of lines on a screen', run: () => undefined },
     { pattern: 'ping <target>', help: 'Send echo messages', run: (ctx, a) => pingCommand(ctx, a.target) },
     { pattern: 'traceroute <target>', help: 'Trace route to destination', run: (ctx, a) => tracerouteCommand(ctx, a.target) },
@@ -848,7 +876,60 @@ export const GLOBAL_CONFIG_ROUTER: Def[] = [
   { pattern: 'no ip dhcp pool <name>', help: 'Remove a DHCP pool', run: ({ state }, a) => { if (!state.dhcpPools[a.name]) return ['% Pool not found']; delete state.dhcpPools[a.name]; state.dhcpBindings = state.dhcpBindings.filter((b) => b.pool !== a.name); } },
   { pattern: 'service dhcp', help: 'Enable DHCP server and relay agent', run: () => undefined },
   { pattern: 'no service dhcp', help: 'Disable DHCP server and relay agent', run: () => undefined },
+  // NAT
+  { pattern: 'ip nat inside source static <local> <global>', help: 'Inside static address translation', run: ({ state }, a) => { if (!isValidIp(a.local) || !isValidIp(a.global)) return [INVALID_INPUT]; if (state.natStatic.some((s) => s.insideLocal === a.local || s.insideGlobal === a.global)) return ['% similar static entry (' + a.local + ' -> ' + a.global + ') already exists']; state.natStatic.push({ insideLocal: a.local, insideGlobal: a.global }); } },
+  { pattern: 'no ip nat inside source static <local> <global>', help: 'Remove a static translation', run: ({ state }, a) => { const before = state.natStatic.length; state.natStatic = state.natStatic.filter((s) => !(s.insideLocal === a.local && s.insideGlobal === a.global)); if (state.natStatic.length === before) return ['% Static entry not found']; state.natTranslations = state.natTranslations.filter((t) => t.insideLocal !== a.local); } },
+  { pattern: 'ip nat pool <name> <start> <end> netmask <mask>', help: 'Define pool of addresses', run: ({ state }, a) => { if (!isValidIp(a.start) || !isValidIp(a.end) || !isValidMask(a.mask) || (ipToInt(a.start) ?? 0) > (ipToInt(a.end) ?? 0)) return [INVALID_INPUT]; state.natPools[a.name] = { name: a.name, start: a.start, end: a.end, netmask: a.mask }; } },
+  { pattern: 'no ip nat pool <name>', help: 'Remove a pool', run: ({ state }, a) => { if (!state.natPools[a.name]) return ['% Pool not found']; if (state.natDynamic?.pool === a.name) return ['%Pool ' + a.name + ' in use, cannot destroy']; delete state.natPools[a.name]; } },
+  { pattern: 'ip nat inside source list <acl> pool <pool>', help: 'Specify pool name for global addresses', run: ({ state }, a) => { if (!state.natPools[a.pool]) return ['%Pool ' + a.pool + ' does not exist']; state.natDynamic = { acl: a.acl, pool: a.pool, overload: false }; } },
+  { pattern: 'ip nat inside source list <acl> pool <pool> overload', help: 'Overload an address translation', run: ({ state }, a) => { if (!state.natPools[a.pool]) return ['%Pool ' + a.pool + ' does not exist']; state.natDynamic = { acl: a.acl, pool: a.pool, overload: true }; } },
+  { pattern: 'ip nat inside source list <acl> interface <interface> overload', help: 'Specify interface for global address', run: ({ state }, a) => { const name = normalizeInterfaceName(a.interface); if (!name || !state.interfaces[name]) return [INVALID_INPUT]; state.natDynamic = { acl: a.acl, interface: name, overload: true }; } },
+  { pattern: 'no ip nat inside source list <acl> pool <pool>', help: 'Remove dynamic translation', run: ({ state }) => { state.natDynamic = undefined; clearTranslations(state); } },
+  { pattern: 'no ip nat inside source list <acl> pool <pool> overload', help: 'Remove dynamic translation', run: ({ state }) => { state.natDynamic = undefined; clearTranslations(state); } },
+  { pattern: 'no ip nat inside source list <acl> interface <interface> overload', help: 'Remove dynamic translation', run: ({ state }) => { state.natDynamic = undefined; clearTranslations(state); } },
+  // IPv6
+  { pattern: 'ipv6 unicast-routing', help: 'Enable unicast routing', run: ({ state }) => void (state.ipv6UnicastRouting = true) },
+  { pattern: 'no ipv6 unicast-routing', help: 'Disable unicast routing', run: ({ state }) => void (state.ipv6UnicastRouting = false) },
+  { pattern: 'ipv6 route <prefix> <via>', help: 'Configure static routes', run: ({ state }, a) => addRoute6(state, a.prefix, a.via) },
+  { pattern: 'ipv6 route <prefix> <via> <nexthop>', help: 'Configure static routes', run: ({ state }, a) => addRoute6(state, a.prefix, a.via, a.nexthop) },
+  { pattern: 'no ipv6 route <prefix> <via>', help: 'Remove a static route', run: ({ state }, a) => removeRoute6(state, a.prefix, a.via) },
+  { pattern: 'no ipv6 route <prefix> <via> <nexthop>', help: 'Remove a static route', run: ({ state }, a) => removeRoute6(state, a.prefix, a.via, a.nexthop) },
+  { pattern: 'no ipv6 route <prefix>', help: 'Remove static routes to a prefix', run: ({ state }, a) => removeRoute6(state, a.prefix) },
 ];
+
+function addRoute6(state: DeviceState, prefixText: string, via: string, nexthop?: string): string[] | void {
+  const p = parsePrefix6(prefixText);
+  if (!p) return [INVALID_INPUT];
+  const viaAddr = normalizeIpv6(via);
+  if (viaAddr && !nexthop) {
+    if (isLinkLocal6(viaAddr)) return ['% Interface has to be specified for a link-local nexthop'];
+    state.staticRoutes6 = state.staticRoutes6.filter((r) => !(r.prefix === p.address && r.length === p.length && r.nextHop === viaAddr && !r.exitInterface));
+    state.staticRoutes6.push({ prefix: p.address, length: p.length, nextHop: viaAddr, adminDistance: 1 });
+    return;
+  }
+  const iface = normalizeInterfaceName(via);
+  if (!iface || !state.interfaces[iface]) return [INVALID_INPUT];
+  const nh = nexthop ? normalizeIpv6(nexthop) : undefined;
+  if (nexthop && !nh) return [INVALID_INPUT];
+  state.staticRoutes6 = state.staticRoutes6.filter((r) => !(r.prefix === p.address && r.length === p.length && r.exitInterface === iface && r.nextHop === nh));
+  state.staticRoutes6.push({ prefix: p.address, length: p.length, exitInterface: iface, nextHop: nh ?? undefined, adminDistance: 1 });
+}
+
+function removeRoute6(state: DeviceState, prefixText: string, via?: string, nexthop?: string): string[] | void {
+  const p = parsePrefix6(prefixText);
+  if (!p) return [INVALID_INPUT];
+  const before = state.staticRoutes6.length;
+  const viaAddr = via ? normalizeIpv6(via) : null;
+  const iface = via && !viaAddr ? normalizeInterfaceName(via) : null;
+  const nh = nexthop ? normalizeIpv6(nexthop) : null;
+  state.staticRoutes6 = state.staticRoutes6.filter((r) => {
+    if (r.prefix !== p.address || r.length !== p.length) return true;
+    if (!via) return false;
+    if (viaAddr) return r.nextHop !== viaAddr;
+    return !(r.exitInterface === iface && (nh === null || r.nextHop === nh));
+  });
+  if (state.staticRoutes6.length === before) return ['%No matching route to delete'];
+}
 
 const INTERFACE_COMMON: Def[] = [
   { pattern: 'description <text...>', help: 'Interface specific description', run: ({ state }, a) => forEachTarget(state, (i) => void (i.description = a.text)) },
@@ -929,6 +1010,56 @@ export const INTERFACE_CONFIG_ROUTER: Def[] = [
   { pattern: 'ip helper-address <address>', help: 'Specify a destination address for UDP broadcasts', run: ({ state }, a) => { if (!isValidIp(a.address)) return [INVALID_INPUT]; return forEachTarget(state, (i) => void (i.helperAddress = a.address)); } },
   { pattern: 'no ip helper-address', help: 'Remove the helper address', run: ({ state }) => forEachTarget(state, (i) => void (i.helperAddress = undefined)) },
   { pattern: 'no ip helper-address <address>', help: 'Remove the helper address', run: ({ state }) => forEachTarget(state, (i) => void (i.helperAddress = undefined)) },
+  { pattern: 'ip nat inside', help: 'Inside interface for address translation', run: ({ state }) => forEachTarget(state, (i) => void (i.natRole = 'inside')) },
+  { pattern: 'ip nat outside', help: 'Outside interface for address translation', run: ({ state }) => forEachTarget(state, (i) => void (i.natRole = 'outside')) },
+  { pattern: 'no ip nat inside', help: 'Remove inside NAT role', run: ({ state }) => forEachTarget(state, (i) => void (i.natRole = i.natRole === 'inside' ? undefined : i.natRole)) },
+  { pattern: 'no ip nat outside', help: 'Remove outside NAT role', run: ({ state }) => forEachTarget(state, (i) => void (i.natRole = i.natRole === 'outside' ? undefined : i.natRole)) },
+  { pattern: 'ipv6 enable', help: 'Enable IPv6 on interface', run: ({ state }) => forEachTarget(state, (i) => void (i.ipv6 = { ...(i.ipv6 ?? { addresses: [] }), enabled: true })) },
+  { pattern: 'no ipv6 enable', help: 'Disable IPv6 on interface', run: ({ state }) => forEachTarget(state, (i) => { if (i.ipv6 && i.ipv6.addresses.length === 0) i.ipv6 = undefined; else if (i.ipv6) i.ipv6.enabled = false; }) },
+  {
+    pattern: 'ipv6 address <address>',
+    help: 'Configure IPv6 address on interface',
+    run: ({ state }, a) => {
+      const p = parsePrefix6(a.address);
+      if (!p) return [INVALID_INPUT];
+      return forEachTarget(state, (i) => {
+        const cfg = (i.ipv6 ??= { enabled: true, addresses: [] });
+        cfg.enabled = true;
+        cfg.addresses = cfg.addresses.filter((x) => x.address !== p.address);
+        cfg.addresses.push({ address: p.address, prefix: p.length });
+      });
+    },
+  },
+  {
+    pattern: 'ipv6 address <prefix> eui-64',
+    help: 'Use eui-64 interface identifier',
+    run: ({ state, nodeId }, a) => {
+      const p = parsePrefix6(a.prefix);
+      if (!p) return [INVALID_INPUT];
+      return forEachTarget(state, (i) => {
+        const cfg = (i.ipv6 ??= { enabled: true, addresses: [] });
+        cfg.enabled = true;
+        const address = eui64Address(p.address, p.length, routerMac(nodeId, i.name));
+        cfg.addresses = cfg.addresses.filter((x) => x.address !== address);
+        cfg.addresses.push({ address, prefix: p.length, eui64: true });
+      });
+    },
+  },
+  {
+    pattern: 'ipv6 address <address> link-local',
+    help: 'Use link-local address',
+    run: ({ state }, a) => {
+      const ll = normalizeIpv6(a.address);
+      if (!ll || !isLinkLocal6(ll)) return ['% Invalid link-local address'];
+      return forEachTarget(state, (i) => {
+        const cfg = (i.ipv6 ??= { enabled: true, addresses: [] });
+        cfg.enabled = true;
+        cfg.linkLocal = ll;
+      });
+    },
+  },
+  { pattern: 'no ipv6 address <address>', help: 'Remove an IPv6 address', run: ({ state }, a) => { const p = parsePrefix6(a.address); const ll = normalizeIpv6(a.address); return forEachTarget(state, (i) => { if (!i.ipv6) return; if (p) i.ipv6.addresses = i.ipv6.addresses.filter((x) => x.address !== p.address); else if (ll && i.ipv6.linkLocal === ll) i.ipv6.linkLocal = undefined; }); } },
+  { pattern: 'no ipv6 address', help: 'Remove all IPv6 addresses', run: ({ state }) => forEachTarget(state, (i) => void (i.ipv6 = undefined)) },
   ...ROUTER_JUMPS,
 ];
 

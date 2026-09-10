@@ -42,6 +42,52 @@ export interface DhcpBinding {
   hostId: string;
 }
 
+export interface Ipv6InterfaceConfig {
+  /** "ipv6 enable" or any address: the interface gets a link-local address. */
+  enabled: boolean;
+  addresses: Array<{ address: string; prefix: number; eui64?: boolean }>;
+  /** Manually configured link-local ("ipv6 address FE80::1 link-local"); otherwise derived from the MAC. */
+  linkLocal?: string;
+}
+
+export interface StaticRoute6 {
+  prefix: string;
+  length: number;
+  nextHop?: string;
+  exitInterface?: string;
+  adminDistance: number;
+}
+
+export interface NatStatic {
+  insideLocal: string;
+  insideGlobal: string;
+}
+
+export interface NatPool {
+  name: string;
+  start: string;
+  end: string;
+  netmask: string;
+}
+
+export interface NatDynamic {
+  acl: string;
+  pool?: string;
+  interface?: string;
+  overload: boolean;
+}
+
+export interface NatTranslation {
+  proto: 'icmp' | 'tcp' | 'udp' | '---';
+  insideLocal: string;
+  insideLocalPort?: number;
+  insideGlobal: string;
+  insideGlobalPort?: number;
+  outsideGlobal?: string;
+  outsidePort?: number;
+  static: boolean;
+}
+
 export type DeviceType = 'switch' | 'router';
 
 export interface OspfNetworkStatement {
@@ -102,6 +148,9 @@ export interface InterfaceState {
   aclOut?: string;
   /** "ip helper-address <server>": relay DHCP toward a server. */
   helperAddress?: string;
+  /** "ip nat inside" / "ip nat outside". */
+  natRole?: 'inside' | 'outside';
+  ipv6?: Ipv6InterfaceConfig;
 }
 
 export interface VlanState {
@@ -180,6 +229,12 @@ export interface DeviceState {
   dhcpPools: Record<string, DhcpPool>;
   dhcpExcluded: Array<{ from: string; to: string }>;
   dhcpBindings: DhcpBinding[];
+  natStatic: NatStatic[];
+  natPools: Record<string, NatPool>;
+  natDynamic?: NatDynamic;
+  natTranslations: NatTranslation[];
+  ipv6UnicastRouting: boolean;
+  staticRoutes6: StaticRoute6[];
 
   enablePassword?: string;
   enableSecret?: string;
