@@ -5,8 +5,9 @@ import Objectives from '../components/Objectives';
 import ResultsModal from '../components/ResultsModal';
 import Terminal from '../components/Terminal';
 import Topology from '../components/Topology';
-import { getLab, isLabUnlocked, labNetwork, nextLab, previousLab, type Lab } from '../content';
-import { executeHost, executeOn, grade, hostPrompt, isMaskedInput, prompt, tabComplete, type GradeResult, type NetworkState } from '../engine';
+import { getLab, isLabUnlocked, labNetwork, nextLab, pathIdOfLab, pathUrl, previousLab, type Lab } from '../content';
+import { applyPythonResult, executeHost, executeOn, grade, hostMaskedInput, hostPrompt, isMaskedInput, prompt, tabComplete, type GradeResult, type NetworkState, type PendingPython } from '../engine';
+import { runPython } from '../lib/pyodide';
 import AccountMenu from '../components/AccountMenu';
 import Icon, { NF, deviceGlyph } from '../components/Icon';
 import { useAuth } from '../lib/auth';
@@ -16,7 +17,16 @@ import { clearSession, loadSession, saveSession, type LabSession, type TermLine 
 
 function welcome(title: string, network: NetworkState, nodeId: string): TermLine[] {
   const dev = network.devices[nodeId];
-  const who = dev ? `${dev.hostname} (Cisco IOS ${dev.deviceType}, simulated)` : `${network.hosts[nodeId]?.name} (PC)`;
+  const host = network.hosts[nodeId];
+  if (host?.os === 'linux' && host.linux) {
+    return [
+      { kind: 'output', text: `Welcome to NetLab: ${title}` },
+      { kind: 'output', text: `Ubuntu 24.04.1 LTS on ${host.linux.hostname} (simulated). Logged in as ${host.linux.user}.` },
+      { kind: 'output', text: "Type 'help' for the commands this shell supports; there is no editor, write files with echo > file or cat > file << 'EOF'." },
+      { kind: 'output', text: '' },
+    ];
+  }
+  const who = dev ? `${dev.hostname} (Cisco IOS ${dev.deviceType}, simulated)` : `${host?.name} (PC)`;
   return [
     { kind: 'output', text: `Welcome to NetLab: ${title}` },
     { kind: 'output', text: `Console: ${who}` },
@@ -41,6 +51,8 @@ export default function LabPage() {
 
   const [session, setSession] = useState<LabSession | null>(() => (lab ? loadSession(lab.id) ?? freshSession(lab) : null));
   const [showChecks, setShowChecks] = useState(true);
+  /** Status text while python3 runs in the browser (Pyodide), or null. */
+  const [pythonBusy, setPythonBusy] = useState<string | null>(null);
   const [result, setResult] = useState<GradeResult | null>(null);
   const [stars, setStars] = useState(0);
 
@@ -96,7 +108,7 @@ export default function LabPage() {
               <Icon g={NF.signIn} />
               Sign in or create an account
             </Link>
-            <Link to="/" className="btn btn-ghost">
+            <Link to={pathUrl(pathIdOfLab(lab))} className="btn btn-ghost">
               Lab list
             </Link>
           </div>
@@ -125,7 +137,7 @@ export default function LabPage() {
                 <Icon g={NF.arrowRight} />
               </Link>
             )}
-            <Link to="/" className="btn btn-ghost">
+            <Link to={pathUrl(pathIdOfLab(lab))} className="btn btn-ghost">
               Lab list
             </Link>
           </div>
@@ -141,13 +153,32 @@ export default function LabPage() {
   const nodeIds = [...Object.keys(network.devices), ...Object.keys(network.hosts)];
   const commandCount = Object.values(network.devices).reduce((n, d) => n + d.commandHistory.length, 0) + Object.values(network.hosts).reduce((n, h) => n + h.commandHistory.length, 0);
 
+  function runPending(nodeId: string, pending: PendingPython) {
+    setPythonBusy('Running python3…');
+    runPython(pending, setPythonBusy)
+      .then((result) => {
+        setSession((cur) => {
+          if (!cur) return cur;
+          const applied = applyPythonResult(cur.network, nodeId, pending, result);
+          const outLines: TermLine[] = applied.output.map((text) => ({ kind: 'output', text }));
+          return { ...cur, network: applied.network, lines: { ...cur.lines, [nodeId]: [...(cur.lines[nodeId] ?? []), ...outLines].slice(-2000) } };
+        });
+      })
+      .catch((e: unknown) => {
+        const text = `python3: could not start the interpreter (${e instanceof Error ? e.message : String(e)}). Check your connection and try again.`;
+        setSession((cur) => (cur ? { ...cur, lines: { ...cur.lines, [nodeId]: [...(cur.lines[nodeId] ?? []), { kind: 'output', text }] } } : cur));
+      })
+      .finally(() => setPythonBusy(null));
+  }
+
   function onSubmit(line: string): boolean {
-    if (!session) return false;
+    if (!session || pythonBusy) return false;
     let keep = false;
     let echoPrompt: string;
     let masked = false;
     let nextNetwork: NetworkState;
     let output: string[];
+    let pending: PendingPython | undefined;
     if (device) {
       echoPrompt = prompt(device);
       masked = isMaskedInput(device);
@@ -155,12 +186,14 @@ export default function LabPage() {
       keep = line.trimEnd().endsWith('?') && !masked;
     } else {
       echoPrompt = hostPrompt(host!);
-      ({ network: nextNetwork, output } = executeHost(network, active, line));
+      masked = hostMaskedInput(host!);
+      ({ network: nextNetwork, output, pending } = executeHost(network, active, line));
     }
     const echo: TermLine = { kind: 'input', prompt: echoPrompt, text: masked ? '' : line };
     const outLines: TermLine[] = output.map((text) => ({ kind: 'output', text }));
     const isClear = !device && /^(cls|clear)$/i.test(line.trim());
     setSession({ ...session, network: nextNetwork, lines: { ...session.lines, [active]: isClear ? [] : [...(session.lines[active] ?? []), echo, ...outLines].slice(-2000) } });
+    if (pending) runPending(active, pending);
     return keep;
   }
 
@@ -194,7 +227,7 @@ export default function LabPage() {
           <Icon g={NF.refresh} />
           Reset lab
         </button>
-        <Link to="/" className="btn btn-ghost btn-sm">
+        <Link to={pathUrl(pathIdOfLab(lab))} className="btn btn-ghost btn-sm">
           <Icon g={NF.arrowLeft} />
           Labs
         </Link>
@@ -274,11 +307,11 @@ export default function LabPage() {
               key={active}
               lines={session.lines[active] ?? []}
               prompt={termPrompt}
-              masked={device ? isMaskedInput(device) : false}
+              masked={device ? isMaskedInput(device) : host ? hostMaskedInput(host) : false}
               onSubmit={onSubmit}
               onTab={(line) => (device ? tabComplete(device, line) : null)}
               onClear={() => setSession({ ...session, lines: { ...session.lines, [active]: [] } })}
-              modeLabel={device ? (device.pendingInput ? 'password' : device.mode) : 'pc'}
+              modeLabel={pythonBusy ? pythonBusy : device ? (device.pendingInput ? 'password' : device.mode) : host?.os === 'linux' ? (host.linux?.pending?.kind === 'script' ? 'bash (continue…)' : host.linux?.pending?.kind === 'password' ? 'password' : 'bash') : 'pc'}
             />
           </div>
         </section>

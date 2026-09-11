@@ -4,6 +4,8 @@ export type Difficulty = 'Beginner' | 'Intermediate' | 'Advanced';
 
 export interface Module {
   id: string;
+  /** Learning path this module belongs to (see content/paths.ts). */
+  pathId: string;
   order: number;
   title: string;
   description: string;

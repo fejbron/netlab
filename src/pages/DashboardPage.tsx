@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import AccountMenu from '../components/AccountMenu';
 import Header from '../components/Header';
 import Icon, { NF } from '../components/Icon';
-import { BLUEPRINT, EXAM_TOPICS, PATH_OVERVIEW, domainCoverage, labs, labsForModule, modules, totalMinutes, type Lab, type Module } from '../content';
+import { domainCoverage, getPath, labsForModule, labsForPath, modulesForPath, paths, pathUrl, totalMinutes, type Lab, type LearningPath, type Module } from '../content';
 import { useAuth } from '../lib/auth';
 import { STAR_LEVELS, labState, nextAction, type LabState } from '../lib/pathProgress';
 import { useProgress } from '../lib/progressStore';
@@ -56,37 +56,60 @@ function hours(minutes: number): string {
   return h >= 10 ? `${Math.round(h)} h` : `${Math.round(h * 2) / 2} h`;
 }
 
-function TopicPill({ code }: { code: string }) {
+function TopicPill({ code, topics }: { code: string; topics: Record<string, string> }) {
   return (
-    <span className="pill border-accent/25 bg-accent-soft text-accent" title={`${code} ${EXAM_TOPICS[code] ?? ''}`}>
+    <span className="pill border-accent/25 bg-accent-soft text-accent" title={`${code} ${topics[code] ?? ''}`}>
       {code}
     </span>
   );
 }
 
-export default function DashboardPage() {
+/** Route wrapper: /paths/:pathId */
+export function PathRoute() {
+  const { pathId = '' } = useParams();
+  const path = getPath(pathId);
+  if (!path) {
+    return (
+      <div className="flex h-full flex-col">
+        <Header />
+        <div className="flex flex-1 flex-col items-center justify-center gap-3">
+          <h1 className="display text-xl text-fg-bright">No such learning path</h1>
+          <Link to="/" className="text-accent hover:underline">
+            Back to the CCNA path
+          </Link>
+        </div>
+      </div>
+    );
+  }
+  return <DashboardPage path={path} />;
+}
+
+export default function DashboardPage({ path = paths[0] }: { path?: LearningPath }) {
   const { progress, reset } = useProgress();
   const auth = useAuth();
   /** Labs need an account whenever the site has accounts at all. */
   const mustSignIn = auth.enabled && !auth.loading && !auth.user;
+  const pathModules = modulesForPath(path.id);
+  const pathLabs = labsForPath(path.id);
 
   // Status per lab, including "in progress" from saved sessions on this device. Recomputed when progress changes.
   const states = useMemo(() => {
     const sessionFor = (id: string) => loadSession(id)?.network ?? null;
-    return Object.fromEntries(labs.map((l) => [l.id, labState(l, progress, sessionFor)])) as Record<string, LabState>;
-  }, [progress]);
-  const next = useMemo(() => nextAction(labs, progress, states), [progress, states]);
-  const coverage = useMemo(() => domainCoverage(modules, labs, progress), [progress]);
+    return Object.fromEntries(pathLabs.map((l) => [l.id, labState(l, progress, sessionFor)])) as Record<string, LabState>;
+  }, [progress, pathLabs]);
+  const next = useMemo(() => nextAction(pathLabs, progress, states), [pathLabs, progress, states]);
+  const coverage = useMemo(() => domainCoverage(path.blueprint.domains, pathModules, pathLabs, progress), [path, pathModules, pathLabs, progress]);
 
-  const completed = labs.filter((l) => progress[l.id]).length;
-  const inProgress = labs.filter((l) => states[l.id].status === 'in-progress').length;
-  const stars = labs.reduce((n, l) => n + (progress[l.id]?.stars ?? 0), 0);
-  const pathPercent = Math.round((completed / labs.length) * 100);
+  const completed = pathLabs.filter((l) => progress[l.id]).length;
+  const inProgress = pathLabs.filter((l) => states[l.id].status === 'in-progress').length;
+  const stars = pathLabs.reduce((n, l) => n + (progress[l.id]?.stars ?? 0), 0);
+  const pathPercent = pathLabs.length ? Math.round((completed / pathLabs.length) * 100) : 0;
   const started = completed > 0 || inProgress > 0;
-  const complete = completed === labs.length;
-  const nextModule = next ? modules.find((m) => m.id === next.lab.moduleId) : undefined;
+  const complete = pathLabs.length > 0 && completed === pathLabs.length;
+  const nextModule = next ? pathModules.find((m) => m.id === next.lab.moduleId) : undefined;
+  const anyProgress = Object.keys(progress).length > 0;
 
-  const moduleStats = modules.map((m) => {
+  const moduleStats = pathModules.map((m) => {
     const items = labsForModule(m.id);
     const done = items.filter((l) => progress[l.id]).length;
     return { module: m, items, done, open: items.some((l) => states[l.id].status !== 'locked'), pct: items.length ? Math.round((done / items.length) * 100) : 0 };
@@ -116,15 +139,17 @@ export default function DashboardPage() {
     );
   }
 
+  const bp = path.blueprint;
+
   return (
     <div className="flex h-full flex-col">
       <Header>
-        {started && (
+        {anyProgress && (
           <button
             type="button"
             className="btn btn-ghost btn-sm text-muted"
             onClick={() => {
-              if (confirm(auth.user ? 'Reset all progress and saved lab sessions, on this device and in your account?' : 'Reset all progress and saved lab sessions?')) void reset();
+              if (confirm(auth.user ? 'Reset all progress and saved lab sessions on every path, on this device and in your account?' : 'Reset all progress and saved lab sessions on every path?')) void reset();
             }}
           >
             <Icon g={NF.refresh} />
@@ -134,16 +159,36 @@ export default function DashboardPage() {
         <AccountMenu />
       </Header>
       <main className="mx-auto w-full max-w-6xl flex-1 overflow-y-auto px-4 pb-16 pt-10">
+        {/* Path switcher */}
+        <nav className="mb-6 flex flex-wrap gap-2" aria-label="Learning paths">
+          {paths.map((p) => {
+            const items = labsForPath(p.id);
+            const done = items.filter((l) => progress[l.id]).length;
+            const current = p.id === path.id;
+            return (
+              <Link key={p.id} to={pathUrl(p.id)} className={`flex items-center gap-3 rounded-xl border px-3.5 py-2 transition-colors ${current ? 'border-accent/50 bg-accent-soft' : 'border-border bg-surface hover:border-border-strong'}`} aria-current={current ? 'page' : undefined}>
+                <Icon g={p.id === 'linux' ? NF.code : NF.exchange} className={current ? 'text-accent' : 'text-muted'} />
+                <span className="min-w-0">
+                  <span className={`block text-sm font-semibold ${current ? 'text-fg-bright' : 'text-fg'}`}>{p.title}</span>
+                  <span className="label block text-muted">
+                    {done}/{items.length} labs · {p.levelLabel}
+                  </span>
+                </span>
+              </Link>
+            );
+          })}
+        </nav>
+
         {/* Path header */}
         <section className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
           <div className="max-w-2xl">
             <p className="label text-accent">
               <Icon g={NF.terminal} className="mr-1.5" />
-              {PATH_OVERVIEW.scopeLabel} · {PATH_OVERVIEW.levelLabel}
+              {path.scopeLabel} · {path.levelLabel}
             </p>
-            <h1 className="display mt-2 text-4xl leading-[1.05] text-fg-bright md:text-5xl">{PATH_OVERVIEW.title}</h1>
+            <h1 className="display mt-2 text-4xl leading-[1.05] text-fg-bright md:text-5xl">{path.title}</h1>
             <p className="mt-3 text-[15px] leading-7 text-muted">
-              {PATH_OVERVIEW.summary} Real IOS syntax, real topologies, graded live as you type. Labs unlock in order.{' '}
+              {path.summary} Graded live as you type. Labs unlock in order.{' '}
               {!auth.enabled ? (
                 'Progress is stored on this device.'
               ) : auth.user ? (
@@ -160,18 +205,18 @@ export default function DashboardPage() {
             <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted">
               <span>
                 <Icon g={NF.flag} className="mr-1.5 text-accent" />
-                {labs.length} labs
+                {pathLabs.length} labs
               </span>
               <span>
                 <Icon g={NF.book} className="mr-1.5 text-accent" />
-                {modules.length} modules
+                {pathModules.length} modules
               </span>
               <span>
                 <Icon g={NF.clock} className="mr-1.5 text-accent" />
-                about {hours(totalMinutes())}
+                about {hours(totalMinutes(pathLabs))}
               </span>
               <span className="flex flex-wrap gap-1">
-                {PATH_OVERVIEW.skillTags.map((t) => (
+                {path.skillTags.map((t) => (
                   <span key={t} className="pill border-transparent bg-surface-2">
                     {t}
                   </span>
@@ -180,7 +225,7 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="grid shrink-0 grid-cols-[repeat(3,minmax(0,1fr))] gap-2 md:grid-cols-1 lg:grid-cols-[repeat(3,minmax(0,1fr))]">
-            <Stat value={`${completed}/${labs.length}`} label="labs passed" glyph={NF.flag} />
+            <Stat value={`${completed}/${pathLabs.length}`} label="labs passed" glyph={NF.flag} />
             <Stat value={String(stars)} label="stars" glyph={NF.star} />
             <Stat value={String(inProgress)} label="in progress" glyph={NF.play} />
           </div>
@@ -269,7 +314,7 @@ export default function DashboardPage() {
                       <div className="mt-2 flex flex-wrap items-center gap-1">
                         <span className="label mr-1 text-muted">Exam topics</span>
                         {m.examTopics.map((t) => (
-                          <TopicPill key={t} code={t} />
+                          <TopicPill key={t} code={t} topics={bp.topics} />
                         ))}
                       </div>
                     )}
@@ -339,7 +384,7 @@ export default function DashboardPage() {
                   What you will be able to do
                 </h2>
                 <ul className="mt-3 space-y-2">
-                  {PATH_OVERVIEW.outcomes.map((o) => (
+                  {path.outcomes.map((o) => (
                     <li key={o} className="flex gap-2.5 text-sm leading-6 text-fg">
                       <Icon g={NF.check} className="mt-1.5 text-[11px] text-accent" />
                       <span>{o}</span>
@@ -350,11 +395,11 @@ export default function DashboardPage() {
               <dl className="space-y-4 text-sm">
                 <div>
                   <dt className="label text-muted">Designed for</dt>
-                  <dd className="mt-1 leading-6 text-fg">{PATH_OVERVIEW.audience}</dd>
+                  <dd className="mt-1 leading-6 text-fg">{path.audience}</dd>
                 </div>
                 <div>
                   <dt className="label text-muted">Recommended knowledge</dt>
-                  <dd className="mt-1 leading-6 text-fg">{PATH_OVERVIEW.prerequisites}</dd>
+                  <dd className="mt-1 leading-6 text-fg">{path.prerequisites}</dd>
                 </div>
                 <div>
                   <dt className="label text-muted">How stars work</dt>
@@ -384,13 +429,13 @@ export default function DashboardPage() {
                     Exam blueprint
                   </p>
                   <h2 id="blueprint-heading" className="display mt-2 text-2xl text-fg-bright">
-                    {BLUEPRINT.version}
+                    {bp.version}
                   </h2>
                   <p className="mt-2 text-sm leading-6 text-muted">
-                    Cisco publishes six exam domains. Each NetLab module is tagged with the blueprint topics it practises, so the bars below show how far you are through the hands-on part of each domain. Reviewed {BLUEPRINT.reviewedAt}.
+                    {bp.intro} Reviewed {bp.reviewedAt}.
                   </p>
                   <dl className="mt-5 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-4">
-                    {BLUEPRINT.facts.map((f) => (
+                    {bp.facts.map((f) => (
                       <div key={f.label} className="bg-surface-2 p-3">
                         <dt className="label text-muted">{f.label}</dt>
                         <dd className="display mt-1 text-lg text-fg-bright">{f.value}</dd>
@@ -401,7 +446,7 @@ export default function DashboardPage() {
                 <aside className="border-t border-border bg-surface-2/50 p-5 sm:p-7 xl:border-l xl:border-t-0">
                   <h3 className="label text-muted">Sources</h3>
                   <ul className="mt-2 space-y-1.5 text-sm">
-                    {BLUEPRINT.sources.map((s) => (
+                    {bp.sources.map((s) => (
                       <li key={s.url}>
                         <a href={s.url} target="_blank" rel="noreferrer" className="text-accent hover:underline">
                           {s.label}
@@ -409,7 +454,7 @@ export default function DashboardPage() {
                       </li>
                     ))}
                   </ul>
-                  <p className="mt-4 text-xs leading-5 text-muted">{BLUEPRINT.weightingNote}</p>
+                  <p className="mt-4 text-xs leading-5 text-muted">{bp.weightingNote}</p>
                 </aside>
               </div>
               <ol className="divide-y divide-border/70 border-t border-border">
@@ -418,7 +463,7 @@ export default function DashboardPage() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                         <h3 className="font-semibold text-fg-bright">
-                          <span className="mr-2 font-mono text-xs text-muted">{d.id}.0</span>
+                          <span className="mr-2 font-mono text-xs text-muted">{/^\d+$/.test(d.id) ? `${d.id}.0` : d.id}</span>
                           {d.title}
                         </h3>
                         <span className="pill">{d.weight}% of the exam</span>
@@ -432,13 +477,13 @@ export default function DashboardPage() {
                             {d.topics.map((t) => (
                               <li key={t}>
                                 <span className="mr-1.5 font-mono text-accent">{t}</span>
-                                {EXAM_TOPICS[t]}
+                                {bp.topics[t]}
                               </li>
                             ))}
                           </ul>
                         </>
                       ) : (
-                        <p className="mt-1 text-xs text-muted">Not covered by NetLab yet. Study this domain from the official exam topics.</p>
+                        <p className="mt-1 text-xs text-muted">Not covered by NetLab yet. Study this domain from the official sources.</p>
                       )}
                     </div>
                     <div className="text-right">
@@ -450,7 +495,7 @@ export default function DashboardPage() {
                   </li>
                 ))}
               </ol>
-              <p className="border-t border-border px-5 py-4 text-xs leading-5 text-muted sm:px-7">{BLUEPRINT.trademarkNotice}</p>
+              <p className="border-t border-border px-5 py-4 text-xs leading-5 text-muted sm:px-7">{bp.trademarkNotice}</p>
             </section>
           </div>
         </div>

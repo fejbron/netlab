@@ -15,8 +15,11 @@ export { routingTable6, lookupRoute6, ifaceIpv6, hostLinkLocal, channelStatus, c
 export type { RouteEntry6, Ipv6Addresses, ChannelStatus, ChannelProtocol, StpVlanInfo, StpPort } from './network';
 export { parseIpv6, formatIpv6, normalizeIpv6, isIpv6, parsePrefix6, sameSubnet6, networkAddress6, eui64Address, linkLocalFromMac, ipv6Config, isLinkLocal6 } from './ipv6';
 export { translateSource, translateDestination, natOwnsAddress } from './nat';
-export { executeHost, hostPrompt, splitArgs } from './host';
-export type { HostExecResult } from './host';
+export { executeHost, hostPrompt, hostMaskedInput, applyPythonResult } from './host';
+export type { HostExecResult, PythonResult } from './host';
+export { splitArgs, curl } from './curl';
+export { createLinuxState, executeLinux, linuxPrompt, runLine, Shell, LINUX_COMMANDS, LINUX_COMMAND_NAMES, normalizePath, getNode, readFile, listDir, modeString, octal } from './linux';
+export type { LinuxState, LinuxSpec, FsNode, LinuxUser, LinuxGroup, LinuxService, PendingPython, CmdResult, LinuxExecResult } from './linux';
 export { restconfRequest, interfaceJson, statusText } from './restconf';
 export type { ApiCall, ApiResponse, ApiMethod } from './restconf';
 export { dhcpSnoopingBindings, dhcpSnoopingDrop } from './network';

@@ -17,6 +17,7 @@ import { intToIp, ipToInt, isValidIp, networkAddress, prefixLength, sameSubnet }
 import { evaluateAcl, type Packet } from './acl';
 import { isIpv6, isLinkLocal6, linkLocalFromMac, networkAddress6, normalizeIpv6, parseIpv6, prefixMask6, sameSubnet6 } from './ipv6';
 import { natOwnsAddress, translateDestination, translateSource } from './nat';
+import { createLinuxState, type LinuxSpec, type LinuxState } from './linux/fs';
 
 export interface HostState {
   kind: 'host';
@@ -38,6 +39,9 @@ export interface HostState {
   mac: string;
   commandHistory: string[];
   pings: PingRecord[];
+  /** A Linux server with a shell instead of the Windows-style PC terminal. */
+  os?: 'linux';
+  linux?: LinuxState;
 }
 
 export function hostLinkLocal(h: HostState): string {
@@ -456,6 +460,8 @@ export interface HostSpec {
   ip6?: string;
   gateway6?: string;
   kind?: HostState['deviceKind'];
+  /** Make this host a Linux server (drawn as a server) with the given setup. */
+  linux?: LinuxSpec | true;
 }
 
 export interface NetworkSpec {
@@ -483,9 +489,10 @@ export function buildNetwork(spec: NetworkSpec): NetworkState {
   (spec.hosts ?? []).forEach((h, idx) => {
     const v6 = h.ip6 ? h.ip6.split('/') : undefined;
     hosts[h.id] = {
-      kind: 'host', id: h.id, name: h.name ?? h.id, deviceKind: h.kind ?? 'pc', ip: h.ip, mask: h.mask, gateway: h.gateway, dns: h.dns, dhcp: h.dhcp,
+      kind: 'host', id: h.id, name: h.name ?? h.id, deviceKind: h.kind ?? (h.linux ? 'server' : 'pc'), ip: h.ip, mask: h.mask, gateway: h.gateway, dns: h.dns, dhcp: h.dhcp,
       ip6: v6 ? normalizeIpv6(v6[0]) ?? undefined : undefined, prefix6: v6 ? Number(v6[1] ?? 64) : undefined, gateway6: h.gateway6 ? normalizeIpv6(h.gateway6) ?? undefined : undefined,
       mac: `0011.22bb.${String(idx + 1).padStart(4, '0')}`, commandHistory: [], pings: [],
+      ...(h.linux ? { os: 'linux' as const, linux: createLinuxState(h.linux === true ? {} : h.linux, h.name ?? h.id) } : {}),
     };
   });
   const net: NetworkState = { primary: spec.primary ?? spec.devices[0].id, devices, hosts, links: [] };

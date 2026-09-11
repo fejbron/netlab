@@ -1,7 +1,8 @@
 import { normalizeInterfaceName } from './interfaces';
 import { isIpv6, normalizeIpv6, parsePrefix6 } from './ipv6';
 import { renderConfigBody } from './ios/show';
-import { channelStatus, ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, stpRoot, stpVlan, type ChannelProtocol, type NetworkState, type RouteEntry } from './network';
+import { channelStatus, ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, stpRoot, stpVlan, type ChannelProtocol, type HostState, type NetworkState, type RouteEntry } from './network';
+import { getNode, normalizePath, octal } from './linux/fs';
 import type { AclAddr, AclEntry, AclProtocol, ApiRequest, CliErrorKind, DeviceState, LineState, Mode, PortMode, SnmpMode, SyslogLevel } from './types';
 
 interface Base {
@@ -106,7 +107,22 @@ export type Check = Base &
     | { type: 'syslog'; host?: string; trap?: SyslogLevel }
     | { type: 'snmp-community'; name?: string; mode?: SnmpMode }
     | { type: 'ntp-server'; address: string }
+    // --- Linux hosts (device = host id)
+    /** A file or directory on a Linux host. `mode` is octal text like "644"; `contains` is a regex over the content. */
+    | { type: 'file'; path: string; exists?: boolean; kind?: 'file' | 'dir' | 'link'; contains?: string; notContains?: string; mode?: string; owner?: string; group?: string; target?: string; executable?: boolean }
+    | { type: 'linux-user'; name: string; exists?: boolean; groups?: string[]; shell?: string; home?: string; hasPassword?: boolean; locked?: boolean }
+    | { type: 'linux-group'; name: string; exists?: boolean; members?: string[] }
+    | { type: 'service'; name: string; active?: boolean; enabled?: boolean; installed?: boolean }
+    | { type: 'package'; name: string; installed?: boolean }
+    | { type: 'linux-hostname'; equals: string }
+    /** Some output the learner has seen on the host matches this regex (scripts that print). */
+    | { type: 'shell-output'; pattern: string }
+    /** python3 ran (a given file, or any) and exited with `exitCode` (default 0); `pattern` is a regex over its stdout. */
+    | { type: 'python-run'; file?: string; exitCode?: number; pattern?: string }
+    | { type: 'process'; pattern: string; running?: boolean }
   );
+
+const LINUX_CHECKS = new Set(['file', 'linux-user', 'linux-group', 'service', 'package', 'linux-hostname', 'shell-output', 'python-run', 'process']);
 
 export interface Objective {
   id: string;
@@ -263,7 +279,97 @@ function describe(check: Check): string {
       return `SNMP community${check.name ? ` ${check.name}` : ''}${check.mode ? ` (${check.mode.toUpperCase()})` : ''}${on}`;
     case 'ntp-server':
       return `NTP server ${check.address}${on}`;
+    case 'file': {
+      if (check.exists === false) return `${check.path} does not exist${on}`;
+      const what = check.kind === 'dir' ? 'Directory' : check.kind === 'link' ? 'Symlink' : 'File';
+      const bits = [check.contains ? `contains ${check.contains.replace(/[\\^$]/g, '')}` : '', check.notContains ? `no longer contains ${check.notContains.replace(/[\\^$]/g, '')}` : '', check.mode ? `mode ${check.mode}` : '', check.owner ? `owned by ${check.owner}` : '', check.group ? `group ${check.group}` : '', check.target ? `pointing at ${check.target}` : '', check.executable ? 'executable' : ''].filter(Boolean);
+      return `${what} ${check.path}${bits.length ? ` ${bits.join(', ')}` : ' exists'}${on}`;
+    }
+    case 'linux-user': {
+      if (check.exists === false) return `User ${check.name} is gone${on}`;
+      const bits = [check.groups ? `in group ${check.groups.join(', ')}` : '', check.shell ? `with shell ${check.shell}` : '', check.home ? `home ${check.home}` : '', check.hasPassword ? 'with a password' : '', check.locked ? 'locked' : check.locked === false ? 'unlocked' : ''].filter(Boolean);
+      return `User ${check.name}${bits.length ? ` ${bits.join(', ')}` : ' exists'}${on}`;
+    }
+    case 'linux-group':
+      return check.exists === false ? `Group ${check.name} is gone${on}` : `Group ${check.name}${check.members ? ` with ${check.members.join(', ')}` : ' exists'}${on}`;
+    case 'service':
+      return `Service ${check.name}${check.installed === false ? ' removed' : ''}${check.active === true ? ' running' : check.active === false ? ' stopped' : ''}${check.enabled === true ? ', enabled at boot' : check.enabled === false ? ', disabled at boot' : ''}${on}`;
+    case 'package':
+      return `Package ${check.name} ${check.installed === false ? 'removed' : 'installed'}${on}`;
+    case 'linux-hostname':
+      return `Hostname is ${check.equals}${on}`;
+    case 'shell-output':
+      return `Output matching ${check.pattern.replace(/[\\^$]/g, '')} appeared${on}`;
+    case 'python-run':
+      return `python3${check.file ? ` ${check.file}` : ''} ran${check.exitCode ? ` and exited ${check.exitCode}` : ' successfully'}${check.pattern ? ` printing ${check.pattern.replace(/[\\^$]/g, '')}` : ''}${on}`;
+    case 'process':
+      return `${check.running === false ? 'No process' : 'A process'} matching ${check.pattern}${on}`;
   }
+}
+
+function evaluateLinuxCheck(check: Check, lx: NonNullable<HostState['linux']>, sh: { path(p: string): string }): boolean {
+  switch (check.type) {
+    case 'file': {
+      const path = sh.path(check.path);
+      const node = check.kind === 'link' ? getNode(lx, path, false) : getNode(lx, path);
+      if (check.exists === false) return !node;
+      if (!node) return false;
+      if (check.kind && node.type !== check.kind) return false;
+      if (check.contains !== undefined && !new RegExp(check.contains, 'm').test(node.content)) return false;
+      if (check.notContains !== undefined && new RegExp(check.notContains, 'm').test(node.content)) return false;
+      if (check.mode !== undefined && octal(node.mode) !== check.mode.padStart(3, '0').slice(-3)) return false;
+      if (check.owner !== undefined && node.owner !== check.owner) return false;
+      if (check.group !== undefined && node.group !== check.group) return false;
+      if (check.target !== undefined && node.target !== check.target) return false;
+      if (check.executable !== undefined && Boolean(node.mode & 0o111) !== check.executable) return false;
+      return true;
+    }
+    case 'linux-user': {
+      const u = lx.users.find((x) => x.name === check.name);
+      if (check.exists === false) return !u;
+      if (!u) return false;
+      const primary = lx.groups.find((g) => g.gid === u.gid)?.name;
+      if (check.groups && !check.groups.every((g) => u.groups.includes(g) || primary === g)) return false;
+      if (check.shell !== undefined && u.shell !== check.shell) return false;
+      if (check.home !== undefined && u.home !== check.home) return false;
+      if (check.hasPassword !== undefined && Boolean(u.password) !== check.hasPassword) return false;
+      if (check.locked !== undefined && Boolean(u.locked) !== check.locked) return false;
+      return true;
+    }
+    case 'linux-group': {
+      const g = lx.groups.find((x) => x.name === check.name);
+      if (check.exists === false) return !g;
+      if (!g) return false;
+      if (check.members && !check.members.every((m) => lx.users.some((u) => u.name === m && (u.groups.includes(check.name) || u.gid === g.gid)))) return false;
+      return true;
+    }
+    case 'service': {
+      const s = lx.services[check.name];
+      if (check.installed === false) return !s;
+      if (!s) return false;
+      if (check.active !== undefined && s.active !== check.active) return false;
+      if (check.enabled !== undefined && s.enabled !== check.enabled) return false;
+      return true;
+    }
+    case 'package':
+      return lx.packages.includes(check.name) === (check.installed ?? true);
+    case 'linux-hostname':
+      return lx.hostname === check.equals;
+    case 'shell-output': {
+      const re = new RegExp(check.pattern, 'm');
+      return lx.outputs.some((l) => re.test(l));
+    }
+    case 'python-run': {
+      const re = check.pattern ? new RegExp(check.pattern, 'm') : null;
+      const want = check.exitCode ?? 0;
+      return lx.pythonRuns.some((r) => (check.file === undefined || (r.file !== undefined && (r.file === check.file || r.file.endsWith('/' + check.file) || sh.path(r.file) === sh.path(check.file)))) && r.exitCode === want && (re === null || re.test(r.stdout)));
+    }
+    case 'process': {
+      const re = new RegExp(check.pattern);
+      return lx.processes.some((p) => re.test(p.cmd)) === (check.running ?? true);
+    }
+  }
+  return false;
 }
 
 function addrText(a: AclAddr): string {
@@ -301,6 +407,10 @@ function deviceFor(check: Check, net: NetworkState): DeviceState | undefined {
 }
 
 export function evaluateCheck(check: Check, net: NetworkState): boolean {
+  return evaluateCheckInner(check, net) ?? false;
+}
+
+function evaluateCheckInner(check: Check, net: NetworkState): boolean | undefined {
   if (check.type === 'ping') {
     const id = check.device ?? net.primary;
     const pings = net.devices[id]?.pings ?? net.hosts[id]?.pings ?? [];
@@ -310,6 +420,12 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
   if (check.type === 'command' && check.device && net.hosts[check.device]) {
     const re = new RegExp(check.pattern, 'i');
     return net.hosts[check.device].commandHistory.some((c) => re.test(c));
+  }
+  if (LINUX_CHECKS.has(check.type)) {
+    const h = net.hosts[check.device ?? ''] ?? Object.values(net.hosts).find((x) => x.os === 'linux');
+    if (!h?.linux) return false;
+    const lx = h.linux;
+    return evaluateLinuxCheck(check, lx, { path: (p) => normalizePath(lx.cwd, p, lx.users.find((u) => u.name === lx.user)?.home ?? '/root') });
   }
   if (check.type === 'host-config') {
     const h = net.hosts[check.device ?? ''];

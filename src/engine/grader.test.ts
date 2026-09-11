@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { isLabUnlocked, labNetwork, labs } from '../content';
 import { grade } from './grader';
-import { executeHost, executeOn, type NetworkState } from './index';
+import { applyPythonResult, executeHost, executeOn, type NetworkState, type PendingPython, type PythonResult } from './index';
+
+/**
+ * Python runs in the browser (Pyodide), not in vitest. Reference solutions for the Python
+ * labs therefore get the result a correct script would produce, keyed by lab id.
+ */
+type Fake = (p: PendingPython) => Partial<PythonResult>;
+let pythonFake: Fake = () => ({});
+const py = (partial: Partial<PythonResult>): PythonResult => ({ stdout: '', stderr: '', exitCode: 0, files: {}, ...partial });
 
 /** Reference-solution lines. "R2: cmd" or "PC-A: cmd" targets another node; default is the primary device. */
 function run(net: NetworkState, ...lines: string[]): NetworkState {
@@ -9,7 +17,9 @@ function run(net: NetworkState, ...lines: string[]): NetworkState {
     const m = raw.match(/^([A-Za-z0-9-]+):\s*(.*)$/);
     const node = m && (n.devices[m[1]] || n.hosts[m[1]]) ? m[1] : n.primary;
     const line = m && node === m[1] ? m[2] : raw;
-    return n.hosts[node] ? executeHost(n, node, line).network : executeOn(n, node, line).network;
+    if (!n.hosts[node]) return executeOn(n, node, line).network;
+    const r = executeHost(n, node, line);
+    return r.pending ? applyPythonResult(r.network, node, r.pending, py(pythonFake(r.pending))).network : r.network;
   }, net);
 }
 
@@ -194,12 +204,50 @@ describe('reference solutions pass', () => {
     'au-07-exam-automation-ready-branch': ['en', 'conf t', 'username netops privilege 15 secret Aut0mate!', 'ip http secure-server', 'ip http authentication local', 'restconf', 'ip domain-name lab.local', 'crypto key generate rsa modulus 2048', 'ip ssh version 2', 'netconf-yang', 'logging host 192.168.2.50', 'logging trap informational', 'snmp-server community NetOps-RO ro', 'ntp server 192.168.2.50', 'end', GET_IFS, PATCH_G00, 'write memory'],
   });
 
+  const HEREDOC = (name: string, ...body: string[]) => [`cat > ${name} << 'EOF'`, ...body, 'EOF'];
+  Object.assign(solutions, {
+    'lx-01-find-your-way': ['pwd', 'ls -la', 'cd /var/log', 'ls', 'cat /etc/os-release', 'man ls', 'cd'],
+    'lx-02-make-files-and-folders': ['mkdir -p ~/projects/netlab/docs', 'echo "NetLab project" > ~/projects/netlab/README.md', 'cp ~/projects/netlab/README.md ~/projects/netlab/docs/', 'mv ~/projects/netlab/docs/README.md ~/projects/netlab/docs/intro.md', 'rm ~/old-draft.txt'],
+    'lx-03-read-and-search': ['head -3 /var/log/auth.log', 'tail -2 /var/log/auth.log', 'grep -c "Failed password" /var/log/auth.log', 'grep "Failed password" /var/log/auth.log > ~/failed.txt', 'wc -l ~/failed.txt'],
+    'lx-04-permissions': ['ls -l', 'chmod 600 secret.txt', 'chmod +x deploy.sh', './deploy.sh', 'mkdir shared', 'chmod 770 shared', 'sudo chown :devops shared'],
+    'lx-05-links-and-find': ['ln -s /var/log/app.log ~/app.log', 'ls -l ~/app.log', 'grep ERROR ~/app.log', 'find /var/log -name "*.log"', 'find ~ -type d'],
+    'lx-06-exam-shell-essentials': ['mkdir -p ~/reports/2026', 'grep ERROR /var/log/app.log > ~/reports/2026/errors.txt', 'grep -c ERROR /var/log/app.log > ~/reports/2026/count.txt', 'chmod 640 ~/reports/2026/errors.txt', 'ln -s reports/2026/errors.txt ~/latest-errors', 'rm ~/old-draft.txt'],
+    'lx-07-become-root': ['cat /etc/shadow', 'sudo -i', 'whoami', 'cat /etc/shadow', 'exit', 'sudo apt update'],
+    'lx-08-users-and-groups': ['sudo groupadd devops', 'sudo useradd -m -s /bin/bash -G devops alice', 'sudo passwd alice', 'Al1ce-pass', 'Al1ce-pass', 'sudo usermod -aG devops bob', 'id alice', 'cat /etc/group'],
+    'lx-09-run-a-web-server': ['systemctl status nginx', 'sudo systemctl enable --now nginx', 'ss -tlnp', 'echo "<h1>Welcome to NetLab on web1</h1>" | sudo tee /var/www/html/index.html', 'PC-A: curl http://192.168.1.50'],
+    'lx-10-processes-and-logs': ['ps aux | grep runaway', 'pkill -f runaway', 'ps aux | grep runaway', 'journalctl -u ssh', 'grep -c ERROR /var/log/app.log'],
+    'lx-11-network-from-the-host': ['ip addr', 'ip route', 'ping -c 3 192.168.1.1', 'ping -c 3 192.168.2.50', 'curl -s -k -u netops:Aut0mate! https://192.168.1.1/restconf/data/ietf-interfaces:interfaces'],
+    'lx-12-exam-bring-up-the-server': ['sudo hostnamectl set-hostname branch-web1', 'sudo groupadd webteam', 'sudo useradd -m -s /bin/bash -G webteam carol', 'sudo passwd carol', 'C4rol-pass', 'C4rol-pass', 'sudo apt install -y nginx', 'sudo systemctl enable --now nginx', 'echo "<h1>Branch web1</h1>" | sudo tee /var/www/html/index.html', 'pkill -f runaway', 'ping -c 2 192.168.1.1', 'PC-A: curl http://192.168.1.50'],
+    'lx-13-variables-and-quotes': ['site=netlab', 'echo "Site: $site"', "echo 'Literal: $site'", 'today=$(date +%F)', 'echo $today', 'export EDITOR=nano', 'env | grep EDITOR', 'echo $((7*6))'],
+    'lx-14-your-first-script': [...HEREDOC('hello.sh', '#!/bin/bash', 'echo "Hello, $1!"'), 'cat hello.sh', 'chmod +x hello.sh', './hello.sh NetLab'],
+    'lx-15-conditions-and-exit-codes': [...HEREDOC('check.sh', '#!/bin/bash', 'if [ -f "$1" ]; then', '  echo "$1 exists"', 'else', '  echo "$1 missing"', '  exit 1', 'fi'), 'chmod +x check.sh', './check.sh /etc/hosts', './check.sh /etc/nothing; echo $?'],
+    'lx-16-loops': ['for f in /var/log/*.log; do echo "$f: $(wc -l < $f) lines"; done', 'while read t; do mkdir -p ~/teams/$t; done < teams.txt', 'ls ~/teams'],
+    'lx-17-functions': [...HEREDOC('lib.sh', 'log() {', '  echo "[$(date +%T)] $*"', '}', 'check_service() {', '  systemctl is-active "$1" > /dev/null && return 0', '  return 1', '}'), 'source lib.sh', 'log hello', 'check_service ssh && echo "ssh is up"'],
+    'lx-18-text-pipelines': ["grep \"Failed password\" /var/log/auth.log | awk '{print $(NF-3)}' | sort | uniq -c | sort -rn > ~/attackers.txt", 'cat ~/attackers.txt', 'cut -d: -f1,7 /etc/passwd | grep bash', "sed 's/ERROR/ERR/' /var/log/app.log | head -3"],
+    'lx-19-exam-backup-script': [...HEREDOC('backup.sh', '#!/bin/bash', 'if [ -z "$1" ]; then', '  echo "usage: backup.sh <dir>"', '  exit 1', 'fi', 'dest=~/backup-$(date +%F)', 'mkdir -p "$dest"', 'count=0', 'for f in "$1"/*; do', '  cp "$f" "$dest/"', '  count=$((count+1))', 'done', 'echo "Backed up $count files to $dest"'), 'chmod +x backup.sh', './backup.sh', './backup.sh ~/docs'],
+    'lx-20-hello-python': ['python3 --version', "python3 -c 'print(\"Hello from Python\")'", ...HEREDOC('hello.py', 'name = "NetLab"', 'print(f"Hello, {name}!")'), 'python3 hello.py'],
+    'lx-21-read-files-with-python': [...HEREDOC('errors.py', 'errors = []', 'with open("/var/log/app.log") as f:', '    for line in f:', '        if "ERROR" in line:', '            errors.append(line.rstrip())', 'print(f"{len(errors)} errors")', 'with open("summary.txt", "w") as out:', '    out.write("\\n".join(errors) + "\\n")'), 'python3 errors.py', 'cat summary.txt'],
+    'lx-22-read-json-with-python': ['cat intent.json', ...HEREDOC('intent.py', 'import json', 'with open("intent.json") as f:', '    intent = json.load(f)', 'print(intent["device"]["hostname"])', 'for iface in intent["interfaces"]:', '    print(iface["name"], iface["ipv4"]["ip"])'), 'python3 intent.py'],
+    'lx-23-generate-config-from-json': [...HEREDOC('render.py', 'import json', 'intent = json.load(open("intent.json"))', 'lines = [f"hostname {intent[\'device\'][\'hostname\']}"]', 'for i in intent["interfaces"]:', '    lines += [f"interface {i[\'name\']}", f" description {i[\'description\']}", f" ip address {i[\'ipv4\'][\'ip\']} {i[\'ipv4\'][\'netmask\']}", " no shutdown"]', 'for r in intent["static-routes"]:', '    lines.append(f"ip route {r[\'prefix\']} {r[\'netmask\']} {r[\'next-hop\']}")', 'for s in intent["ntp"]["servers"]:', '    lines.append(f"ntp server {s}")', 'open("r2.cfg", "w").write("\\n".join(lines) + "\\n")'), 'python3 render.py', 'cat r2.cfg'],
+    'lx-24-exam-audit-the-server': [...HEREDOC('audit.py', 'import json', 'users = []', 'for line in open("/etc/passwd"):', '    name, _, uid, _, _, _, shell = line.rstrip().split(":")', '    if int(uid) >= 1000 and "nologin" not in shell:', '        users.append((name, uid, shell))', 'with open("users.csv", "w") as f:', '    for u in users:', '        f.write(",".join(u) + "\\n")', 'failed = sum(1 for l in open("/var/log/auth.log") if "Failed password" in l)', 'print(f"{failed} failed logins")', 'json.dump({"users": [u[0] for u in users], "failed_logins": failed}, open("audit.json", "w"), indent=2)'), 'python3 audit.py', 'cat users.csv'],
+  });
+
+  const HOME = '/home/student';
+  const fakes: Record<string, Fake> = {
+    'lx-20-hello-python': (p) => ({ stdout: p.argv[0] === '-c' ? 'Hello from Python\n' : 'Hello, NetLab!\n' }),
+    'lx-21-read-files-with-python': () => ({ stdout: '2 errors\n', files: { [`${HOME}/summary.txt`]: '2026-09-11 08:57:44 ERROR disk full while writing /var/lib/app/cache\n2026-09-11 08:58:10 ERROR timeout talking to 192.168.2.50:5432\n' } }),
+    'lx-22-read-json-with-python': () => ({ stdout: 'Site2-R2\nGigabitEthernet0/0 192.168.2.1\nGigabitEthernet0/1 10.0.0.2\n' }),
+    'lx-23-generate-config-from-json': () => ({ files: { [`${HOME}/r2.cfg`]: ['hostname Site2-R2', 'interface GigabitEthernet0/0', ' description Site 2 LAN', ' ip address 192.168.2.1 255.255.255.0', ' no shutdown', 'interface GigabitEthernet0/1', ' description Link to R1', ' ip address 10.0.0.2 255.255.255.252', ' no shutdown', 'ip route 192.168.1.0 255.255.255.0 10.0.0.1', 'ntp server 192.168.1.50', ''].join('\n') } }),
+    'lx-24-exam-audit-the-server': () => ({ stdout: '4 failed logins\n', files: { [`${HOME}/users.csv`]: 'student,1000,/bin/bash\nbob,1001,/bin/bash\n', [`${HOME}/audit.json`]: '{\n  "users": [\n    "student",\n    "bob"\n  ],\n  "failed_logins": 4\n}' } }),
+  };
+
   it('covers every lab', () => {
     expect(Object.keys(solutions).sort()).toEqual(labs.map((l) => l.id).sort());
   });
 
   for (const lab of labs) {
     it(lab.id, () => {
+      pythonFake = fakes[lab.id] ?? (() => ({}));
       const net = run(labNetwork(lab), ...(solutions[lab.id] ?? []));
       const result = grade(lab.objectives, net);
       const failing = result.objectives.filter((o) => !o.passed).map((o) => `${o.label}: ${o.checks.filter((c) => !c.passed).map((c) => c.label).join(', ')}`);

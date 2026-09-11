@@ -109,8 +109,8 @@ export interface DomainCoverage extends ExamDomain {
 }
 
 /** Per-domain lab counts and learner progress, from the modules' topic lists. */
-export function domainCoverage(modules: Module[], labs: Lab[], progress: Record<string, unknown>): DomainCoverage[] {
-  return EXAM_DOMAINS.map((d) => {
+export function domainCoverage(domains: ExamDomain[], modules: Module[], labs: Lab[], progress: Record<string, unknown>): DomainCoverage[] {
+  return domains.map((d) => {
     const mods = modules.filter((m) => (m.examTopics ?? []).some((t) => topicDomain(t) === d.id));
     const topics = [...new Set(mods.flatMap((m) => m.examTopics ?? []).filter((t) => topicDomain(t) === d.id))].sort(byTopicCode);
     const ids = new Set(mods.map((m) => m.id));
@@ -120,9 +120,10 @@ export function domainCoverage(modules: Module[], labs: Lab[], progress: Record<
   });
 }
 
-/** "1.13" sorts after "1.6" (numeric, not lexical). */
+/** "1.13" sorts after "1.6" (numeric, not lexical); letter domains ("EC.2") sort by name. */
 export function byTopicCode(a: string, b: string): number {
-  const [ad, at] = a.split('.').map(Number);
-  const [bd, bt] = b.split('.').map(Number);
-  return ad - bd || at - bt;
+  const [ad, at] = a.split('.');
+  const [bd, bt] = b.split('.');
+  const dn = Number(ad) - Number(bd);
+  return (Number.isNaN(dn) ? ad.localeCompare(bd) : dn) || Number(at) - Number(bt);
 }
