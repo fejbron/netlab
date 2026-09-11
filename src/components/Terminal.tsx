@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { TermLine } from '../lib/session';
+import Icon, { NF } from './Icon';
 
 interface Props {
   lines: TermLine[];
@@ -72,8 +73,8 @@ export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onCle
   }
 
   return (
-    <div className="flex h-full flex-col bg-term font-mono text-[13px] leading-5" onClick={() => inputRef.current?.focus()}>
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
+    <div className="flex h-full flex-col bg-term font-mono text-[13px] leading-[1.45]" onClick={() => inputRef.current?.focus()}>
+      <div ref={scrollRef} className="flex-1 overflow-auto px-4 py-3">
         {lines.map((l, i) =>
           l.kind === 'input' ? (
             <div key={i} className="whitespace-pre-wrap break-all">
@@ -100,13 +101,27 @@ export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onCle
             spellCheck={false}
             aria-label="Command input"
             placeholder={lines.length === 0 ? 'Type a command...' : ''}
-            className="ml-0 flex-1 bg-transparent text-fg-bright outline-none placeholder:text-muted"
+            className="ml-0 flex-1 bg-transparent text-fg-bright caret-accent outline-none placeholder:text-muted"
           />
         </div>
       </div>
-      <div className="flex items-center justify-between border-t border-border px-4 py-1.5 text-[11px] text-muted">
-        <span>Mode: {modeLabel}</span>
-        <span>Tab completes · ? for help · ↑↓ history · Ctrl+L clear</span>
+      <div className="flex items-center justify-between gap-3 border-t border-border/70 bg-surface px-4 py-1.5 text-[11px] text-muted">
+        <span className="flex items-center gap-1.5">
+          <Icon g={NF.terminal} className="text-accent" />
+          <span className="label">{modeLabel}</span>
+        </span>
+        <span className="hidden gap-3 sm:flex">
+          {[
+            ['Tab', 'complete'],
+            ['?', 'help'],
+            ['↑↓', 'history'],
+            ['Ctrl+L', 'clear'],
+          ].map(([k, v]) => (
+            <span key={k} className="whitespace-nowrap">
+              <kbd className="rounded bg-surface-3 px-1 font-mono text-[10px] text-fg">{k}</kbd> {v}
+            </span>
+          ))}
+        </span>
       </div>
     </div>
   );

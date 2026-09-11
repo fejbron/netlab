@@ -8,6 +8,7 @@ import Topology from '../components/Topology';
 import { getLab, isLabUnlocked, labNetwork, nextLab, previousLab, type Lab } from '../content';
 import { executeHost, executeOn, grade, hostPrompt, isMaskedInput, prompt, tabComplete, type GradeResult, type NetworkState } from '../engine';
 import AccountMenu from '../components/AccountMenu';
+import Icon, { NF, deviceGlyph } from '../components/Icon';
 import { useAuth } from '../lib/auth';
 import { useProgress } from '../lib/progressStore';
 import { clearSession, loadSession, saveSession, type LabSession, type TermLine } from '../lib/session';
@@ -60,8 +61,9 @@ export default function LabPage() {
       <div className="flex h-full flex-col">
         <Header />
         <div className="flex flex-1 flex-col items-center justify-center gap-2">
-          <p className="text-lg font-semibold text-fg-bright">Lab not found</p>
-          <Link to="/" className="text-accent hover:underline">
+          <p className="display text-lg text-fg-bright">Lab not found</p>
+          <Link to="/" className="btn btn-ghost btn-sm">
+            <Icon g={NF.arrowLeft} />
             Back to the lab list
           </Link>
         </div>
@@ -83,16 +85,17 @@ export default function LabPage() {
       <div className="flex h-full flex-col">
         <Header />
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
-          <p className="text-3xl" aria-hidden>
-            🔐
-          </p>
-          <p className="text-lg font-semibold text-fg-bright">Sign in to start {lab.title}</p>
-          <p className="max-w-md text-sm text-muted">Labs need an account so your scores and stars are saved and count on the leaderboard. It's free.</p>
-          <div className="flex gap-3">
-            <Link to={`/account?next=/lab/${lab.id}`} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
-              Sign in or create an account →
+          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-accent-soft text-2xl text-accent">
+            <Icon g={NF.lock} />
+          </span>
+          <p className="display text-xl text-fg-bright">Sign in to start {lab.title}</p>
+          <p className="max-w-md text-sm leading-6 text-muted">Labs need an account so your scores and stars are saved and count on the leaderboard. It's free.</p>
+          <div className="mt-2 flex gap-3">
+            <Link to={`/account?next=/lab/${lab.id}`} className="btn btn-primary">
+              <Icon g={NF.signIn} />
+              Sign in or create an account
             </Link>
-            <Link to="/" className="rounded-lg border border-border px-4 py-1.5 text-sm hover:bg-surface-2">
+            <Link to="/" className="btn btn-ghost">
               Lab list
             </Link>
           </div>
@@ -107,18 +110,21 @@ export default function LabPage() {
       <div className="flex h-full flex-col">
         <Header />
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
-          <p className="text-3xl" aria-hidden>
-            🔒
+          <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-surface-2 text-2xl text-muted">
+            <Icon g={NF.lock} />
+          </span>
+          <p className="display text-xl text-fg-bright">{lab.title} is locked</p>
+          <p className="max-w-md text-sm leading-6 text-muted">
+            Labs unlock in order. Pass {prev ? <strong className="text-fg">{prev.title}</strong> : 'the previous lab'} first.
           </p>
-          <p className="text-lg font-semibold text-fg-bright">{lab.title} is locked</p>
-          <p className="max-w-md text-sm text-muted">Labs unlock in order. Pass {prev ? <strong className="text-fg">{prev.title}</strong> : 'the previous lab'} first.</p>
-          <div className="flex gap-3">
+          <div className="mt-2 flex gap-3">
             {prev && (
-              <Link to={`/lab/${prev.id}`} className="rounded-lg bg-accent px-4 py-1.5 text-sm font-semibold text-bg hover:brightness-110">
-                Go to {prev.title} →
+              <Link to={`/lab/${prev.id}`} className="btn btn-primary">
+                Go to {prev.title}
+                <Icon g={NF.arrowRight} />
               </Link>
             )}
-            <Link to="/" className="rounded-lg border border-border px-4 py-1.5 text-sm hover:bg-surface-2">
+            <Link to="/" className="btn btn-ghost">
               Lab list
             </Link>
           </div>
@@ -177,49 +183,60 @@ export default function LabPage() {
   return (
     <div className="flex h-full flex-col">
       <Header>
-        <div className="mr-auto hidden flex-col leading-tight md:flex">
-          <span className="font-semibold text-fg-bright">{lab.title}</span>
-          <span className="text-[11px] text-muted">
+        <div className="mr-auto hidden min-w-0 flex-col leading-tight md:flex">
+          <span className="display truncate text-[15px] text-fg-bright">{lab.title}</span>
+          <span className="label text-muted">
             {lab.estimatedMinutes} min · {lab.difficulty} · {passedCount}/{lab.objectives.length} objectives
           </span>
         </div>
-        <button type="button" onClick={reset} className="rounded-md border border-danger/40 px-3 py-1 text-xs text-danger hover:bg-danger/10">
+        <button type="button" onClick={reset} className="btn btn-danger btn-sm">
+          <Icon g={NF.refresh} />
           Reset lab
         </button>
-        <Link to="/" className="rounded-md border border-border px-3 py-1 text-xs hover:bg-surface-2">
-          ← Labs
+        <Link to="/" className="btn btn-ghost btn-sm">
+          <Icon g={NF.arrowLeft} />
+          Labs
         </Link>
         <AccountMenu />
       </Header>
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[320px_minmax(0,1fr)_340px]">
-        <aside className="min-h-0 overflow-y-auto border-b border-border bg-surface p-4 lg:border-r lg:border-b-0">
-          <h2 className="text-sm font-semibold text-fg-bright">Scenario</h2>
+      <main className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[330px_minmax(0,1fr)_340px]">
+        <aside className="min-h-0 overflow-y-auto border-b border-border bg-surface/60 p-4 lg:border-r lg:border-b-0">
+          <h2 className="label text-muted">
+            <Icon g={NF.book} className="mr-1.5 text-accent" />
+            Scenario
+          </h2>
           {lab.scenario.split('\n\n').map((p, i) => (
             <p key={i} className="mt-2 whitespace-pre-line text-sm leading-6 text-fg">
               {p}
             </p>
           ))}
 
-          <div className="mt-5">{live && <Objectives result={live} showChecks={showChecks} onToggleChecks={() => setShowChecks((v) => !v)} />}</div>
+          <div className="mt-6">{live && <Objectives result={live} showChecks={showChecks} onToggleChecks={() => setShowChecks((v) => !v)} />}</div>
 
-          <button type="button" onClick={check} className="mt-5 w-full rounded-lg border border-accent/40 bg-accent-soft py-2.5 text-sm font-semibold text-accent hover:bg-accent/20">
-            ▷ Check results
+          <button type="button" onClick={check} className="btn btn-primary mt-5 w-full justify-center py-2.5">
+            <Icon g={NF.play} />
+            Check results
           </button>
 
           {lab.hints.length > 0 && (
-            <section className="mt-5">
-              <h2 className="text-sm font-semibold text-fg-bright">Hints</h2>
-              <p className="text-[11px] text-muted">Revealing hints lowers your star rating for this attempt.</p>
+            <section className="mt-6">
+              <h2 className="label text-muted">
+                <Icon g={NF.bulb} className="mr-1.5 text-warning" />
+                Hints
+              </h2>
+              <p className="mt-0.5 text-[11px] text-muted">Revealing hints lowers your star rating for this attempt.</p>
               <ol className="mt-2 space-y-2 text-sm">
                 {lab.hints.slice(0, session.hintsRevealed).map((h, i) => (
-                  <li key={i} className="rounded-lg border border-border bg-surface-2 p-2 text-fg">
-                    {i + 1}. {h}
+                  <li key={i} className="rounded-xl border border-warning/20 bg-warning/[0.06] px-3 py-2 text-fg">
+                    <span className="mr-2 font-mono text-xs text-warning">{String(i + 1).padStart(2, '0')}</span>
+                    {h}
                   </li>
                 ))}
               </ol>
               {session.hintsRevealed < lab.hints.length && (
-                <button type="button" onClick={() => setSession({ ...session, hintsRevealed: session.hintsRevealed + 1 })} className="mt-2 text-xs text-accent hover:underline">
+                <button type="button" onClick={() => setSession({ ...session, hintsRevealed: session.hintsRevealed + 1 })} className="btn btn-ghost btn-sm mt-2">
+                  <Icon g={NF.eye} />
                   Show hint {session.hintsRevealed + 1} of {lab.hints.length}
                 </button>
               )}
@@ -242,9 +259,9 @@ export default function LabPage() {
                     role="tab"
                     aria-selected={isActive}
                     onClick={() => setSession({ ...session, active: id })}
-                    className={`rounded-t-lg border border-b-0 px-3 py-1.5 text-xs font-medium ${isActive ? 'border-border bg-term text-fg-bright' : 'border-transparent text-muted hover:text-fg'}`}
+                    className={`flex items-center gap-1.5 rounded-t-lg border border-b-0 px-3 py-1.5 font-mono text-xs ${isActive ? 'border-border bg-term text-fg-bright' : 'border-transparent text-muted hover:text-fg'}`}
                   >
-                    <span className="mr-1 text-[10px] uppercase text-muted">{kind}</span>
+                    <Icon g={deviceGlyph(kind)} className={kind === 'router' ? 'text-warning' : kind === 'switch' ? 'text-accent-2' : 'text-muted'} />
                     {label}
                   </button>
                 );
@@ -265,7 +282,7 @@ export default function LabPage() {
           </div>
         </section>
 
-        <aside className="min-h-0 overflow-y-auto border-t border-border bg-surface p-4 lg:border-l lg:border-t-0">
+        <aside className="min-h-0 overflow-y-auto border-t border-border bg-surface/60 p-4 lg:border-l lg:border-t-0">
           <Topology network={network} active={active} onSelect={(id) => setSession({ ...session, active: id })} />
         </aside>
       </main>

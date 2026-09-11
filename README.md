@@ -70,6 +70,10 @@ The anon key is safe to ship in the browser bundle: every request runs under the
 
 The app is a static site, so the free tier is enough. Import the repository in Vercel; it detects Vite and uses `npm run build` with `dist/` as the output directory. `vercel.json` rewrites every path to `index.html` so deep links like `/lab/os-01-turn-on-ospf` work on refresh. To enable accounts, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` as environment variables in the project settings and redeploy. Any other static host (Netlify, Cloudflare Pages, GitHub Pages) works the same way as long as it serves `index.html` for unknown paths.
 
+## Design
+
+Dark theme built on the Catppuccin Mocha palette with a mauve accent (tokens in `src/index.css`). Headings, labels, the terminal and all icons use a self-hosted [JetBrainsMono Nerd Font](https://www.nerdfonts.com/) (`public/fonts/`, WOFF2); prose uses Inter. Icons are Nerd Font glyphs rendered through `src/components/Icon.tsx`, so no icon library is needed.
+
 ## Project layout
 
 ```

@@ -1,4 +1,5 @@
 import { interfaceStatus, isLoopback, isSubinterface, isSvi, shortInterfaceName, compareInterfaceNames, type NetworkState } from '../engine';
+import { deviceGlyph } from './Icon';
 
 interface Props {
   network: NetworkState;
@@ -49,8 +50,8 @@ export default function Topology({ network, active, onSelect }: Props) {
 
   return (
     <div className="space-y-4">
-      <section className="rounded-xl border border-border bg-surface p-3">
-        <h2 className="mb-1 text-sm font-semibold text-fg-bright">Topology</h2>
+      <section className="card p-3">
+        <h2 className="label text-muted">Topology</h2>
         <p className="mb-1 text-[11px] text-muted">Click a device to open its terminal.</p>
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full" role="img" aria-label="Network topology">
           {network.links.map((l, i) => {
@@ -80,18 +81,23 @@ export default function Topology({ network, active, onSelect }: Props) {
           })}
           {nodes.map((n) => {
             const isActive = n.id === active;
-            const fill = n.kind === 'router' ? 'fill-warning/15' : n.kind === 'switch' ? 'fill-accent-soft' : 'fill-surface-2';
-            const stroke = isActive ? 'stroke-accent' : n.kind === 'router' ? 'stroke-warning/60' : n.kind === 'switch' ? 'stroke-accent/60' : 'stroke-border';
+            const fill = n.kind === 'router' ? 'fill-warning/10' : n.kind === 'switch' ? 'fill-accent-2/10' : 'fill-surface-2';
+            const stroke = isActive ? 'stroke-accent' : n.kind === 'router' ? 'stroke-warning/50' : n.kind === 'switch' ? 'stroke-accent-2/50' : 'stroke-border-strong';
+            const iconColor = n.kind === 'router' ? 'fill-warning' : n.kind === 'switch' ? 'fill-accent-2' : 'fill-muted';
             return (
               <g key={n.id} transform={`translate(${n.x} ${n.y})`} className="cursor-pointer" onClick={() => onSelect(n.id)} role="button" aria-label={`Open ${n.title}`}>
-                <rect x={-48} y={-26} width={96} height={52} rx={n.kind === 'router' ? 26 : 8} className={`${fill} ${stroke}`} strokeWidth={isActive ? 2 : 1} />
-                <text y={-7} textAnchor="middle" className="fill-fg-bright text-[11px] font-semibold">
+                {isActive && <rect x={-52} y={-30} width={104} height={60} rx={14} className="fill-accent/10" />}
+                <rect x={-48} y={-26} width={96} height={52} rx={10} className={`${fill} ${stroke}`} strokeWidth={isActive ? 1.5 : 1} />
+                <text x={-40} y={-8} className={`${iconColor} font-mono text-[12px]`}>
+                  {deviceGlyph(n.kind)}
+                </text>
+                <text x={-24} y={-7} className="fill-fg-bright font-mono text-[11px] font-bold">
                   {n.title}
                 </text>
-                <text y={6} textAnchor="middle" className="fill-muted text-[9px]">
+                <text x={-40} y={7} className="fill-muted font-mono text-[8px] tracking-wider">
                   {n.subtitle}
                 </text>
-                <text y={19} textAnchor="middle" className="fill-fg text-[9px] font-mono">
+                <text x={-40} y={19} className="fill-fg font-mono text-[9px]">
                   {n.detail}
                 </text>
               </g>
@@ -101,10 +107,10 @@ export default function Topology({ network, active, onSelect }: Props) {
       </section>
 
       {device && device.deviceType === 'switch' && (
-        <section className="rounded-xl border border-border bg-surface p-3">
-          <h2 className="mb-2 text-sm font-semibold text-fg-bright">{device.hostname} interfaces</h2>
+        <section className="card p-3">
+          <h2 className="label mb-2 text-muted">{device.hostname} interfaces</h2>
           <table className="w-full text-left text-xs">
-            <thead className="text-muted">
+            <thead className="label text-muted">
               <tr>
                 <th className="pb-1 font-medium">Port</th>
                 <th className="pb-1 font-medium">Mode</th>
@@ -149,10 +155,10 @@ export default function Topology({ network, active, onSelect }: Props) {
       )}
 
       {device && device.deviceType === 'router' && (
-        <section className="rounded-xl border border-border bg-surface p-3">
-          <h2 className="mb-2 text-sm font-semibold text-fg-bright">{device.hostname} interfaces</h2>
+        <section className="card p-3">
+          <h2 className="label mb-2 text-muted">{device.hostname} interfaces</h2>
           <table className="w-full text-left text-xs">
-            <thead className="text-muted">
+            <thead className="label text-muted">
               <tr>
                 <th className="pb-1 font-medium">Interface</th>
                 <th className="pb-1 font-medium">IP address</th>
@@ -182,7 +188,7 @@ export default function Topology({ network, active, onSelect }: Props) {
           </table>
           {device.staticRoutes.length > 0 && (
             <div className="mt-3">
-              <h3 className="mb-1 text-xs font-semibold text-fg-bright">Static routes</h3>
+              <h3 className="label mb-1 text-muted">Static routes</h3>
               <ul className="font-mono text-xs text-fg">
                 {device.staticRoutes.map((r, i) => (
                   <li key={i}>
@@ -196,8 +202,8 @@ export default function Topology({ network, active, onSelect }: Props) {
       )}
 
       {host && (
-        <section className="rounded-xl border border-border bg-surface p-3">
-          <h2 className="mb-2 text-sm font-semibold text-fg-bright">{host.name}</h2>
+        <section className="card p-3">
+          <h2 className="label mb-2 text-muted">{host.name}</h2>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-xs">
             <dt className="text-muted">IPv4</dt>
             <dd className="text-fg-bright">{host.ip ?? '—'}</dd>
