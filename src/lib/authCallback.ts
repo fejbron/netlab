@@ -111,3 +111,13 @@ export function takeRememberedNext(store: Storage | undefined = globalThis.local
     return '/';
   }
 }
+
+/**
+ * Supabase answers a sign-in through a provider that is switched off with
+ * "Unsupported provider: provider is not enabled", which reads like a bug in
+ * the site rather than a setting nobody has filled in yet.
+ */
+export function oauthErrorMessage(raw: string, provider = 'GitHub'): string {
+  if (/provider is not enabled|unsupported provider/i.test(raw)) return `${provider} sign-in is not enabled on this site yet. Use an email address and password instead.`;
+  return raw;
+}

@@ -6,7 +6,7 @@ import Icon, { NF } from '../components/Icon';
 import { labs } from '../content';
 import { formatPoints, maxTotalPoints, totalPoints } from '../lib/points';
 import { useAuth } from '../lib/auth';
-import { callbackMessage, canResend, safeNext, takeRememberedNext } from '../lib/authCallback';
+import { callbackMessage, canResend, oauthErrorMessage, safeNext, takeRememberedNext } from '../lib/authCallback';
 import { authCallback } from '../lib/supabase';
 import { fetchProfile, updateProfile, type Profile } from '../lib/leaderboard';
 import { useProgress } from '../lib/progressStore';
@@ -165,7 +165,7 @@ export default function AccountPage() {
     try {
       await auth.signInWithGitHub(next);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(oauthErrorMessage(err instanceof Error ? err.message : String(err)));
     }
   }
 

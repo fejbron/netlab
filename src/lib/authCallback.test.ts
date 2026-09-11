@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountUrl, callbackMessage, canResend, readAuthCallback, rememberNext, safeNext, takeRememberedNext } from './authCallback';
+import { accountUrl, callbackMessage, canResend, oauthErrorMessage, readAuthCallback, rememberNext, safeNext, takeRememberedNext } from './authCallback';
 
 /** Enough of the Storage interface for these tests. */
 function fakeStore(): Storage {
@@ -103,5 +103,16 @@ describe('remembering where the learner was headed', () => {
   it('does not fail the sign-up when the browser refuses storage', () => {
     expect(() => rememberNext('/lab/ip-01', refusingStore)).not.toThrow();
     expect(takeRememberedNext(refusingStore)).toBe('/');
+  });
+});
+
+describe('signing in through a provider', () => {
+  it('explains a provider nobody has switched on', () => {
+    expect(oauthErrorMessage('Unsupported provider: provider is not enabled')).toContain('not enabled on this site yet');
+    expect(oauthErrorMessage('Unsupported provider: provider is not enabled', 'Google')).toContain('Google');
+  });
+
+  it('leaves any other failure in Supabase’s words', () => {
+    expect(oauthErrorMessage('Network request failed')).toBe('Network request failed');
   });
 });

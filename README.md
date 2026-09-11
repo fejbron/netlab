@@ -65,7 +65,17 @@ NetLab works without any backend. To let learners create accounts and keep progr
    ```
 
    It creates the `lab_progress` table (with a `points` column) and its row-level security, so each learner can only read and write their own rows, plus a `profiles` table (public display name, leaderboard opt-out, filled in automatically when an account is created) and the `leaderboard` view, which totals points across learners without exposing anyone's individual rows. The file is safe to re-run after upgrades.
-2. In Authentication > Providers, keep Email enabled, and optionally enable GitHub.
+2. In Authentication > Providers, keep Email enabled. To offer the "Continue with GitHub" button as well, enable the GitHub provider, which takes an OAuth app on GitHub's side:
+
+   1. At https://github.com/settings/developers, choose **New OAuth App**. The homepage URL is your site; the **Authorization callback URL** is Supabase's, not yours:
+
+      ```
+      https://<your-project-ref>.supabase.co/auth/v1/callback
+      ```
+
+   2. Generate a client secret, then paste the client ID and secret into Authentication > Providers > GitHub in Supabase and enable it.
+
+   GitHub sends the learner to Supabase, which sends them on to the redirect URLs configured in the next step, so nothing else needs listing. The button is always shown; until the provider is enabled, pressing it reports that GitHub is not configured.
 3. In Authentication > URL Configuration, set **Site URL** to the address learners actually use, and add every origin you sign in from under **Redirect URLs**:
 
    ```
