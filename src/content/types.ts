@@ -7,6 +7,8 @@ export interface Module {
   order: number;
   title: string;
   description: string;
+  /** 200-301 CCNA blueprint topic codes this module practises, e.g. ['2.1', '2.2']. See content/blueprint.ts. */
+  examTopics?: string[];
 }
 
 export interface Lab {

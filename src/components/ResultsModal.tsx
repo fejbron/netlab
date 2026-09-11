@@ -1,4 +1,5 @@
 import type { GradeResult } from '../engine';
+import { STAR_LEVELS } from '../lib/pathProgress';
 import Icon, { NF } from './Icon';
 
 interface Props {
@@ -21,7 +22,9 @@ export default function ResultsModal({ result, stars, labTitle, commandCount, ne
             <Icon key={n} g={n <= stars ? NF.star : NF.starO} className={n <= stars ? 'text-star drop-shadow-[0_0_12px_rgba(249,226,175,0.45)]' : 'text-surface-3'} />
           ))}
         </div>
-        <p className={`label text-center ${result.passed ? 'text-success' : 'text-warning'}`}>{result.passed ? 'Lab complete' : 'Not there yet'}</p>
+        <p className={`label text-center ${result.passed ? 'text-success' : 'text-warning'}`}>
+          {result.passed ? `Lab complete · ${STAR_LEVELS.find((l) => l.stars === stars)?.label ?? ''}` : 'Not there yet'}
+        </p>
         <h2 id="results-title" className="display mt-1 text-center text-xl text-fg-bright">
           {labTitle}
         </h2>

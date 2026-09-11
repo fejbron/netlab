@@ -14,6 +14,8 @@ Open-source network CLI labs that run entirely in your browser. Practise Cisco I
 - **Spanning tree**: per-VLAN root election by bridge ID (priority + MAC), root path cost, root/designated/alternate port roles with the loop-breaking ports blocked in the forwarding simulation (so the network reconverges when a link fails or the root moves), `spanning-tree vlan N priority` and `root primary`/`secondary`, `spanning-tree mode pvst|rapid-pvst`, per-port `cost`, PortFast and BPDU guard (which err-disables a port that faces a switch), and IOS-style `show spanning-tree [vlan N]`.
 - **Port security**: `switchport port-security` with maximum, static and sticky addresses and shutdown/restrict/protect violation modes, enforced when a PC sends traffic. Violations err-disable the port (or drop frames), `shutdown` / `no shutdown` recovers it, and `show port-security` (interface and address) reports the state.
 - **Progression**: labs unlock in order, so passing the last lab of a module opens the next module.
+- **Learning path dashboard**: a "continue your course" card picks the next lab (an unfinished session first, then the next open lab), a sticky stage navigator shows a progress ring per module, and every lab row reports its status (not started, *n of m objectives* from the saved console, completed) with a Begin / Resume / Replay action. Stars are explained in place: 3 for a pass with no hints, 2 with some, 1 with all of them.
+- **CCNA 200-301 v1.1 exam blueprint**: each module is tagged with the blueprint topics it practises (`examTopics` in `src/content/index.ts`, described in `src/content/blueprint.ts`). The dashboard lists Cisco's six exam domains with their published weighting, the labs that cover each one, and the learner's progress per domain, and says plainly which domains NetLab does not cover yet.
 - **Router model**: routed interfaces, dot1Q subinterfaces, loopbacks, static and default routes with administrative distance, and an IOS 15 style `show ip route` with connected, local, static and OSPF routes grouped by classful network.
 - **OSPF**: `router ospf`, router IDs (configured or elected from loopbacks and interfaces), `network` statements with wildcard masks and areas, `ip ospf <pid> area`, passive interfaces, interface cost and priority, DR/BDR election per segment, neighbours only when area and subnet match, SPF over the router graph with accumulated metrics, administrative distance 110, and `default-information originate` producing O*E2 defaults. Multi-area: intra-area SPF per area (`O`), inter-area routes learned through area border routers attached to the backbone (`O IA`), intra-area preferred over inter-area, and an area with no path to area 0 stays isolated. `show ip ospf neighbor`, `show ip ospf interface brief`, `show ip ospf`, `show ip protocols`, `show ip route ospf`.
 - **Multi-device topologies with real forwarding**: labs can hold several switches, routers and PCs. `ping` and `traceroute` walk frames through switches (access, trunk, native and allowed VLANs, router subinterface tags) and route packets hop by hop, and only succeed when the reply can get back too.
@@ -88,8 +90,10 @@ src/
     grader.ts          Declarative checks and grade(objectives, network)
   content/
     labs/*.ts          Lab definitions (scenario, hints, initial device, objectives)
+    blueprint.ts       CCNA 200-301 exam domains, weights, topic titles and per-domain coverage
   components/, pages/  React UI (dashboard, lab page, terminal, topology)
-  lib/                 progress (localStorage + optional Supabase sync), auth, per-lab session persistence
+  lib/                 progress (localStorage + optional Supabase sync), auth, per-lab session persistence,
+                       pathProgress (lab status, next action, star levels)
 supabase/schema.sql    optional database schema for accounts
 ```
 
@@ -131,7 +135,7 @@ createState: () =>
 
 Every check accepts an optional `device` (a device id, or a host id for `ping`); it defaults to the network's primary device. Available check types: `command` (regex over the expanded command history), `mode`, `hostname`, `vlan-exists`, `vlan-absent`, `interface`, `enable-secret`, `enable-password`, `line`, `user`, `banner`, `domain-name`, `ssh-ready`, `default-gateway`, `saved`, `password-encryption`, `error-seen`, `ping`, `route`, `route-absent`, `learned-route`, `ospf`, `ospf-network`, `ospf-network-absent`, `ospf-neighbors`, `passive-interface`, `default-information-originate`, `trunk-allows`, `acl-exists`, `acl-entry`, `acl-applied`, `acl-not-applied`, `access-class`, `dhcp-pool`, `dhcp-excluded`, `dhcp-bindings`, `helper-address`, `host-config`, `nat-role`, `nat-static`, `nat-pool`, `nat-dynamic`, `nat-translations`, `ipv6-unicast-routing`, `ipv6-address`, `route6`, `etherchannel`, `port-security`, `stp-root`, `stp-priority`, `stp-mode`, `stp-port`. See `src/engine/grader.ts`.
 
-Add the lab to a module file in `src/content/labs/` and add a reference solution to `src/engine/grader.test.ts` so it stays green.
+Add the lab to a module file in `src/content/labs/` and add a reference solution to `src/engine/grader.test.ts` so it stays green. A new module also needs `examTopics` (200-301 topic codes such as `'3.4'`) in `src/content/index.ts`; any code not yet described in `src/content/blueprint.ts` must be added there, and the blueprint test enforces both.
 
 ## Roadmap
 

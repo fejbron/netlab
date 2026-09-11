@@ -11,6 +11,7 @@ import AccountMenu from '../components/AccountMenu';
 import Icon, { NF, deviceGlyph } from '../components/Icon';
 import { useAuth } from '../lib/auth';
 import { useProgress } from '../lib/progressStore';
+import { starsFor } from '../lib/pathProgress';
 import { clearSession, loadSession, saveSession, type LabSession, type TermLine } from '../lib/session';
 
 function welcome(title: string, network: NetworkState, nodeId: string): TermLine[] {
@@ -171,7 +172,7 @@ export default function LabPage() {
 
   function check() {
     const r = grade(lab!.objectives, network);
-    const s = !r.passed ? 0 : session!.hintsRevealed === 0 ? 3 : session!.hintsRevealed < lab!.hints.length ? 2 : 1;
+    const s = starsFor(r.passed, session!.hintsRevealed, lab!.hints.length);
     setStars(s);
     setResult(r);
     if (r.passed) recordPass(lab!.id, { score: r.score, stars: s, completedAt: new Date().toISOString() });
@@ -225,7 +226,7 @@ export default function LabPage() {
                 <Icon g={NF.bulb} className="mr-1.5 text-warning" />
                 Hints
               </h2>
-              <p className="mt-0.5 text-[11px] text-muted">Revealing hints lowers your star rating for this attempt.</p>
+              <p className="mt-0.5 text-[11px] text-muted">3 stars with no hints, 2 with some, 1 with all of them.</p>
               <ol className="mt-2 space-y-2 text-sm">
                 {lab.hints.slice(0, session.hintsRevealed).map((h, i) => (
                   <li key={i} className="rounded-xl border border-warning/20 bg-warning/[0.06] px-3 py-2 text-fg">
