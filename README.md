@@ -66,16 +66,17 @@ NetLab works without any backend. To let learners create accounts and keep progr
 
    It creates the `lab_progress` table (with a `points` column) and its row-level security, so each learner can only read and write their own rows, plus a `profiles` table (public display name, leaderboard opt-out, filled in automatically when an account is created) and the `leaderboard` view, which totals points across learners without exposing anyone's individual rows. The file is safe to re-run after upgrades.
 2. In Authentication > Providers, keep Email enabled, and optionally enable GitHub.
-3. In Authentication > URL Configuration, set **Site URL** to the address learners actually use (`https://your-site.example`) and add these under **Redirect URLs**:
+3. In Authentication > URL Configuration, set **Site URL** to the address learners actually use, and add every origin you sign in from under **Redirect URLs**:
 
    ```
-   https://your-site.example/account
-   https://your-site.example/account?next=*
-   http://localhost:5173/account
-   http://localhost:5173/account?next=*
+   Site URL:       https://your-site.example
+   Redirect URLs:  https://your-site.example/account
+                   http://localhost:5173/account
    ```
 
-   Confirmation links come back to `/account`, carrying `?next=` so a learner who was sent to sign in from a lab is returned to it. Supabase silently falls back to the Site URL for any address that is not on this list, which is the usual reason a confirmation link lands somewhere unexpected. A deployment served from an origin you cannot list (a preview build, say) can set `VITE_SITE_URL` to one you can.
+   **Do this before anyone signs up.** A new project ships with `http://localhost:3000` as its Site URL, and Supabase silently falls back to the Site URL whenever a confirmation link asks to return anywhere that is not on the redirect list. A confirmation email that lands on `localhost:3000` means these two settings have not been filled in.
+
+   Confirmation links come back to `/account` and nothing is appended to them, so one entry per origin is all it takes. Where the learner was headed is kept in their browser, not in the link. A deployment served from an origin you cannot list, such as a preview build, can set `VITE_SITE_URL` to one you can.
 4. Copy the project URL and the anon (public) key from Project Settings > API into a `.env.local` file (see `.env.example`):
 
    ```

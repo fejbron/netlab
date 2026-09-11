@@ -1,5 +1,33 @@
 import { describe, expect, it } from 'vitest';
-import { accountUrl, callbackMessage, canResend, readAuthCallback, safeNext } from './authCallback';
+import { accountUrl, callbackMessage, canResend, readAuthCallback, rememberNext, safeNext, takeRememberedNext } from './authCallback';
+
+/** Enough of the Storage interface for these tests. */
+function fakeStore(): Storage {
+  const map = new Map<string, string>();
+  return {
+    getItem: (k) => map.get(k) ?? null,
+    setItem: (k, v) => void map.set(k, v),
+    removeItem: (k) => void map.delete(k),
+    clear: () => map.clear(),
+    key: (i) => [...map.keys()][i] ?? null,
+    get length() {
+      return map.size;
+    },
+  } as Storage;
+}
+
+/** A browser that refuses storage, as private windows do. */
+const refusingStore = {
+  getItem() {
+    throw new Error('denied');
+  },
+  setItem() {
+    throw new Error('denied');
+  },
+  removeItem() {
+    throw new Error('denied');
+  },
+} as unknown as Storage;
 
 const site = 'https://netlab.example';
 
@@ -42,19 +70,38 @@ describe('reading the URL Supabase sends learners back to', () => {
 });
 
 describe('where the confirmation link comes back to', () => {
-  it('returns the learner to the page they were headed for', () => {
-    expect(accountUrl(site, '/lab/ip-01')).toBe('https://netlab.example/account?next=%2Flab%2Fip-01');
-    expect(accountUrl(site, '/')).toBe('https://netlab.example/account');
-    expect(accountUrl(site, null)).toBe('https://netlab.example/account');
-  });
-
-  it('ignores a trailing slash on the configured site URL', () => {
-    expect(accountUrl('https://netlab.example/', '/leaderboard')).toBe('https://netlab.example/account?next=%2Fleaderboard');
+  it('is the bare account page, so one allow-list entry per origin covers it', () => {
+    expect(accountUrl(site)).toBe('https://netlab.example/account');
+    expect(accountUrl('https://netlab.example/')).toBe('https://netlab.example/account');
   });
 
   it('refuses to bounce anyone off-site', () => {
     for (const hostile of ['//evil.example', 'https://evil.example', 'javascript:alert(1)', '']) expect(safeNext(hostile)).toBe('/');
     expect(accountUrl(site, '//evil.example')).toBe('https://netlab.example/account');
     expect(safeNext('/lab/ip-01')).toBe('/lab/ip-01');
+  });
+});
+
+describe('remembering where the learner was headed', () => {
+  it('survives the trip through the mailbox, once', () => {
+    const store = fakeStore();
+    rememberNext('/lab/ip-01', store);
+    expect(takeRememberedNext(store)).toBe('/lab/ip-01');
+    // Reading it clears it, so a later visit is not dragged back to the lab.
+    expect(takeRememberedNext(store)).toBe('/');
+  });
+
+  it('stores nothing for the dashboard, and never an off-site address', () => {
+    const store = fakeStore();
+    rememberNext('/lab/ip-01', store);
+    rememberNext('/', store);
+    expect(takeRememberedNext(store)).toBe('/');
+    rememberNext('//evil.example', store);
+    expect(takeRememberedNext(store)).toBe('/');
+  });
+
+  it('does not fail the sign-up when the browser refuses storage', () => {
+    expect(() => rememberNext('/lab/ip-01', refusingStore)).not.toThrow();
+    expect(takeRememberedNext(refusingStore)).toBe('/');
   });
 });

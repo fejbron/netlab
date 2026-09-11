@@ -6,7 +6,7 @@ import Icon, { NF } from '../components/Icon';
 import { labs } from '../content';
 import { formatPoints, maxTotalPoints, totalPoints } from '../lib/points';
 import { useAuth } from '../lib/auth';
-import { callbackMessage, canResend } from '../lib/authCallback';
+import { callbackMessage, canResend, safeNext, takeRememberedNext } from '../lib/authCallback';
 import { authCallback } from '../lib/supabase';
 import { fetchProfile, updateProfile, type Profile } from '../lib/leaderboard';
 import { useProgress } from '../lib/progressStore';
@@ -93,9 +93,11 @@ export default function AccountPage() {
   const { progress, sync, syncError } = useProgress();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  // Where to go after signing in: only same-site paths are honoured.
-  const rawNext = params.get('next') ?? '/';
-  const next = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/';
+  // Where to go after signing in: the link that sent the learner here, or, when they are
+  // back from a confirmation email, wherever they were headed when they signed up.
+  const [remembered] = useState(() => (authCallback.kind === 'none' ? '/' : takeRememberedNext()));
+  const fromLink = safeNext(params.get('next'));
+  const next = fromLink === '/' ? remembered : fromLink;
   const [tab, setTab] = useState<Tab>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

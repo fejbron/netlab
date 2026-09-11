@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
+import { rememberNext } from './authCallback';
 import { accountsEnabled, authRedirectTo, supabase } from './supabase';
 
 export interface AuthState {
@@ -59,18 +60,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     },
     async signUp(email, password, next) {
       if (!supabase) fail('Accounts are not enabled on this site.');
-      const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: authRedirectTo(next) } });
+      rememberNext(next);
+      const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: authRedirectTo() } });
       if (error) fail(error.message);
       return data.session === null;
     },
     async resendConfirmation(email, next) {
       if (!supabase) fail('Accounts are not enabled on this site.');
-      const { error } = await supabase.auth.resend({ type: 'signup', email, options: { emailRedirectTo: authRedirectTo(next) } });
+      rememberNext(next);
+      const { error } = await supabase.auth.resend({ type: 'signup', email, options: { emailRedirectTo: authRedirectTo() } });
       if (error) fail(error.message);
     },
     async signInWithGitHub(next) {
       if (!supabase) fail('Accounts are not enabled on this site.');
-      const { error } = await supabase.auth.signInWithOAuth({ provider: 'github', options: { redirectTo: authRedirectTo(next) } });
+      rememberNext(next);
+      const { error } = await supabase.auth.signInWithOAuth({ provider: 'github', options: { redirectTo: authRedirectTo() } });
       if (error) fail(error.message);
     },
     async signOut() {

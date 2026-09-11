@@ -76,3 +76,38 @@ export function accountUrl(site: string, next?: string | null): string {
   const path = safeNext(next);
   return path === '/' ? `${base}/account` : `${base}/account?next=${encodeURIComponent(path)}`;
 }
+
+/**
+ * Where the learner was headed, kept across the trip through the mailbox.
+ *
+ * It deliberately does not travel in the redirect URL. Supabase only honours
+ * redirect targets that match its allow-list and silently falls back to the
+ * project's Site URL otherwise, so every extra query parameter is one more
+ * pattern the operator has to get right. Keeping the destination here means
+ * the redirect is always the bare account page.
+ *
+ * localStorage rather than sessionStorage because the confirmation email is
+ * usually opened in a new tab.
+ */
+const NEXT_KEY = 'netlab-auth-next';
+
+export function rememberNext(next: string | null | undefined, store: Storage | undefined = globalThis.localStorage): void {
+  const path = safeNext(next);
+  try {
+    if (path === '/') store?.removeItem(NEXT_KEY);
+    else store?.setItem(NEXT_KEY, path);
+  } catch {
+    // Private browsing can refuse storage; losing the destination is not worth failing the sign-up over.
+  }
+}
+
+/** Read the remembered destination and forget it, so it cannot fire twice. */
+export function takeRememberedNext(store: Storage | undefined = globalThis.localStorage): string {
+  try {
+    const stored = store?.getItem(NEXT_KEY) ?? null;
+    store?.removeItem(NEXT_KEY);
+    return safeNext(stored);
+  } catch {
+    return '/';
+  }
+}

@@ -31,7 +31,11 @@ export function siteUrl(): string {
   return typeof window === 'undefined' ? '' : window.location.origin;
 }
 
-/** The confirmation link's destination: the account page, remembering where the learner was going. */
-export function authRedirectTo(next?: string | null): string {
-  return accountUrl(siteUrl(), next);
+/**
+ * The confirmation link's destination. Nothing is appended to it, so the operator
+ * has a single URL to allow per origin; where the learner was headed is kept in
+ * local storage instead (see lib/authCallback.ts).
+ */
+export function authRedirectTo(): string {
+  return accountUrl(siteUrl());
 }
