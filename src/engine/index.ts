@@ -15,5 +15,9 @@ export { routingTable6, lookupRoute6, ifaceIpv6, hostLinkLocal, channelStatus, c
 export type { RouteEntry6, Ipv6Addresses, ChannelStatus, ChannelProtocol, StpVlanInfo, StpPort } from './network';
 export { parseIpv6, formatIpv6, normalizeIpv6, isIpv6, parsePrefix6, sameSubnet6, networkAddress6, eui64Address, linkLocalFromMac, ipv6Config, isLinkLocal6 } from './ipv6';
 export { translateSource, translateDestination, natOwnsAddress } from './nat';
-export { executeHost, hostPrompt } from './host';
+export { executeHost, hostPrompt, splitArgs } from './host';
 export type { HostExecResult } from './host';
+export { restconfRequest, interfaceJson, statusText } from './restconf';
+export type { ApiCall, ApiResponse, ApiMethod } from './restconf';
+export { dhcpSnoopingBindings, dhcpSnoopingDrop } from './network';
+export type { SnoopingBinding, SwitchHop } from './network';

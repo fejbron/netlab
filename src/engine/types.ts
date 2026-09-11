@@ -162,6 +162,10 @@ export interface InterfaceState {
   stpCost?: number;
   /** Put into err-disabled by a port-security violation; cleared by shutdown / no shutdown. */
   errDisabled?: boolean;
+  /** "ip dhcp snooping trust": DHCP server messages may arrive on this port. */
+  dhcpSnoopingTrust?: boolean;
+  /** "ip arp inspection trust": ARP on this port is not validated against the snooping table. */
+  arpInspectionTrust?: boolean;
 }
 
 export type ChannelMode = 'on' | 'active' | 'passive' | 'desirable' | 'auto';
@@ -191,6 +195,37 @@ export interface LineState {
   transportInput?: 'all' | 'ssh' | 'telnet' | 'none';
   /** "access-class <acl> in" on VTY lines. */
   accessClass?: string;
+  /** "exec-timeout <minutes> <seconds>"; IOS default is 10 minutes. */
+  execTimeout?: { minutes: number; seconds: number };
+}
+
+/** "login block-for <seconds> attempts <tries> within <seconds>". */
+export interface LoginBlock {
+  seconds: number;
+  attempts: number;
+  within: number;
+}
+
+export type AaaLoginMethod = 'local' | 'local-case' | 'enable' | 'none';
+
+/** Switch-side DHCP snooping ("ip dhcp snooping"). */
+export interface DhcpSnooping {
+  enabled: boolean;
+  vlans: number[];
+  /** Insertion of option 82 (on by default in IOS). */
+  optionInsert: boolean;
+}
+
+export type SnmpMode = 'ro' | 'rw';
+
+export type SyslogLevel = 'emergencies' | 'alerts' | 'critical' | 'errors' | 'warnings' | 'notifications' | 'informational' | 'debugging';
+
+/** One RESTCONF request the device answered, for show output and grading. */
+export interface ApiRequest {
+  method: 'GET' | 'PATCH' | 'PUT' | 'DELETE' | 'POST';
+  path: string;
+  status: number;
+  user?: string;
 }
 
 export interface UserAccount {
@@ -277,6 +312,32 @@ export interface DeviceState {
   ipDomainName?: string;
   rsaKeyBits?: number;
   sshVersion?: 1 | 2;
+
+  // Security hardening
+  /** "security passwords min-length <n>": shorter secrets and passwords are rejected. */
+  minPasswordLength?: number;
+  loginBlock?: LoginBlock;
+  aaaNewModel: boolean;
+  /** "aaa authentication login default <methods>" (only with aaa new-model). */
+  aaaLoginDefault?: AaaLoginMethod[];
+  dhcpSnooping?: DhcpSnooping;
+  /** "ip arp inspection vlan <list>". */
+  arpInspectionVlans: number[];
+
+  // Management APIs and telemetry
+  httpServer: boolean;
+  httpSecureServer: boolean;
+  /** "ip http authentication local": the API checks the local user database. */
+  httpAuthLocal: boolean;
+  restconf: boolean;
+  netconfYang: boolean;
+  apiRequests: ApiRequest[];
+  loggingHosts: string[];
+  loggingTrap?: SyslogLevel;
+  snmpCommunities: Array<{ name: string; mode: SnmpMode }>;
+  snmpLocation?: string;
+  snmpContact?: string;
+  ntpServers: string[];
 
   /** Text snapshot of the config body at the last save, or null when never saved. */
   startupConfig: string | null;

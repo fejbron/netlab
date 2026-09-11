@@ -4,12 +4,24 @@ import { isPortChannel, isSvi, normalizeInterfaceName, shortInterfaceName, sviVl
 import { isExtendedNumber, isStandardNumber, nextSeq, parseExtendedRule, parseStandardRule } from '../acl';
 import { eui64Address, isIpv6, isLinkLocal6, normalizeIpv6, parsePrefix6 } from '../ipv6';
 import { clearTranslations } from '../nat';
-import { applyAclHits, channelMembers, channelStatus, isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, portChannelId, routerMac, routingTable, routingTable6, stpVlan, type NetworkState } from '../network';
+import { applyAclHits, channelMembers, channelStatus, dhcpSnoopingBindings, forward, isLoopback, isSubinterface, macTable, nodeName, ospfInterfaceRole, ospfInterfaces, ospfNeighbors, ospfRouterId, parentInterface, ping as netPing, portChannelId, routerMac, routingTable, routingTable6, stpVlan, type NetworkState } from '../network';
+import type { AaaLoginMethod, SyslogLevel } from '../types';
 import { intToIp, ipToInt, isValidIp, isValidMask, networkAddress, parseVlanList } from './net';
 import {
   defaultVlanName,
   renderConfigBody,
   showAccessLists,
+  showIpArpInspection,
+  showIpArpInspectionInterfaces,
+  showIpDhcpSnooping,
+  showIpDhcpSnoopingBinding,
+  showLogging,
+  showLogin,
+  showNtpAssociations,
+  showNtpStatus,
+  showRestconfRequests,
+  showSnmpCommunity,
+  showYangProcesses,
   showEtherchannelSummary,
   showPortSecurity,
   showPortSecurityAddress,
@@ -184,6 +196,42 @@ export const WORD_HELP: Record<string, string> = {
   pvst: 'Per-Vlan spanning tree mode',
   primary: 'Configure this switch as primary root for this spanning tree',
   secondary: 'Configure switch as secondary root',
+  security: 'Infra Security CLIs',
+  passwords: 'Configure passwords related settings',
+  'min-length': 'Minimum length of passwords',
+  'block-for': 'Set quiet-mode active time period',
+  attempts: 'Set max number of fail attempts for quiet-mode',
+  within: 'Watch period for fail attempts',
+  aaa: 'Authentication, Authorization and Accounting.',
+  'new-model': 'Enable NEW access control commands and functions.(Disables OLD commands.)',
+  authentication: 'Authentication configurations parameters.',
+  default: 'The default authentication list.',
+  snooping: 'DHCP Snooping',
+  trust: 'DHCP Snooping trust config',
+  information: 'DHCP Snooping information',
+  option: 'DHCP Snooping information option',
+  arp: 'Set a static ARP entry',
+  inspection: 'ARP Inspection configuration',
+  http: 'HTTP server configuration',
+  server: 'Enable HTTP server',
+  'secure-server': 'Enable HTTP secure server',
+  restconf: 'Enable RESTCONF',
+  'netconf-yang': 'Enable NETCONF-YANG',
+  host: 'Set syslog server IP address and parameters',
+  trap: 'Set syslog server logging level',
+  'snmp-server': 'Modify SNMP engine parameters',
+  community: 'Enable SNMP; set community string and access privs',
+  ro: 'Read-only access with this community string',
+  rw: 'Read-write access with this community string',
+  location: 'Text for mib object sysLocation',
+  contact: 'Text for mib object sysContact',
+  ntp: 'Configure NTP',
+  associations: 'NTP associations',
+  platform: 'Show platform information',
+  software: 'Show software information',
+  'yang-management': 'YANG management information',
+  process: 'Process information',
+  requests: 'RESTCONF requests answered by this device',
 };
 
 // ---------------------------------------------------------------------------
@@ -517,11 +565,27 @@ const HELP_TEXT = [
 // ---------------------------------------------------------------------------
 // exec mode commands
 
+/** An NTP server counts as reachable when the device can get a UDP/123 packet to it and back. */
+function ntpReachable({ network, nodeId }: Ctx, server: string): boolean {
+  const out = forward(network, nodeId, server, { protocol: 'udp', dstPort: 123, srcPort: 123 }, { record: false });
+  if (!out.reached) return false;
+  const dstNode = out.hops[out.hops.length - 1]?.node ?? nodeId;
+  if (dstNode === nodeId) return true;
+  return forward(network, dstNode, out.srcIp!, { protocol: 'udp', dstPort: 123, srcPort: 123, src: server }, { record: false }).reached;
+}
+
 const SHOW_COMMON_USER: Def[] = [
   { pattern: 'show version', help: 'System hardware and software status', run: ({ state }) => showVersion(state) },
   { pattern: 'show ip interface brief', help: 'Brief summary of IP status and configuration', run: ({ state }) => showIpInterfaceBrief(state) },
   { pattern: 'show history', help: 'Display the session command history', run: ({ state }) => showHistory(state) },
   { pattern: 'show users', help: 'Display information about terminal lines', run: () => ['    Line       User       Host(s)              Idle       Location', '*  0 con 0                idle                 00:00:00'] },
+  { pattern: 'show login', help: 'Display Secure Login Configurations and State', run: ({ state }) => showLogin(state) },
+  { pattern: 'show logging', help: 'Show the contents of logging buffers', run: ({ state }) => showLogging(state) },
+  { pattern: 'show ntp status', help: 'Status of NTP', run: (ctx) => showNtpStatus(ctx.state, ctx.state.ntpServers.some((s) => ntpReachable(ctx, s))) },
+  { pattern: 'show ntp associations', help: 'NTP associations', run: (ctx) => showNtpAssociations(ctx.state, (s) => ntpReachable(ctx, s)) },
+  { pattern: 'show snmp community', help: 'SNMP community string information', run: ({ state }) => showSnmpCommunity(state) },
+  { pattern: 'show platform software yang-management process', help: 'Status of the programmability processes', run: ({ state }) => showYangProcesses(state) },
+  { pattern: 'show restconf requests', help: 'RESTCONF requests answered by this device', run: ({ state }) => showRestconfRequests(state) },
 ];
 
 const SHOW_SWITCH_USER: Def[] = [
@@ -573,6 +637,11 @@ const SHOW_SWITCH_USER: Def[] = [
     },
   },
   { pattern: 'show storm-control', help: 'Show packet storm control configuration', run: () => ['Interface  Filter State   Upper        Lower        Current'] },
+  { pattern: 'show ip dhcp snooping', help: 'DHCP snooping', run: ({ state }) => showIpDhcpSnooping(state) },
+  { pattern: 'show ip dhcp snooping binding', help: 'DHCP snooping bindings', run: ({ network, nodeId }) => showIpDhcpSnoopingBinding(dhcpSnoopingBindings(network, nodeId)) },
+  { pattern: 'show ip arp inspection', help: 'ARP inspection', run: ({ state }) => showIpArpInspection(state) },
+  { pattern: 'show ip arp inspection vlan <vlan>', help: 'ARP inspection for a VLAN', run: ({ state }, a) => (/^\d+$/.test(a.vlan) ? showIpArpInspection(state, Number(a.vlan)) : [INVALID_INPUT]) },
+  { pattern: 'show ip arp inspection interfaces', help: 'ARP inspection interface trust and rate limits', run: ({ state }) => showIpArpInspectionInterfaces(state) },
   {
     pattern: 'show ip route',
     help: 'IP routing table',
@@ -735,11 +804,84 @@ const SWITCH_JUMPS: Def[] = [
   },
 ];
 
-function setUser(state: DeviceState, username: string, password: string, secret: boolean, privilege: number) {
+/** "security passwords min-length" rejects short secrets with the real IOS message. */
+function tooShort(state: DeviceState, password: string): string[] | null {
+  const min = state.minPasswordLength;
+  if (min === undefined || password.length >= min) return null;
+  return [`% Password too short - must be at least ${min} characters. Password configuration failed`];
+}
+
+function setUser(state: DeviceState, username: string, password: string, secret: boolean, privilege: number): string[] | void {
+  const short = tooShort(state, password);
+  if (short) return short;
   const existing = state.users.find((u) => u.username === username);
   if (existing) Object.assign(existing, { password, secret, privilege });
   else state.users.push({ username, password, secret, privilege });
 }
+
+const SYSLOG_LEVELS: SyslogLevel[] = ['emergencies', 'alerts', 'critical', 'errors', 'warnings', 'notifications', 'informational', 'debugging'];
+
+function parseSyslogLevel(text: string): SyslogLevel | null {
+  if (/^[0-7]$/.test(text)) return SYSLOG_LEVELS[Number(text)];
+  const found = SYSLOG_LEVELS.filter((l) => l.startsWith(text.toLowerCase()));
+  return found.length === 1 ? found[0] : null;
+}
+
+function parseAaaMethods(text: string): AaaLoginMethod[] | null {
+  const methods = text.trim().split(/\s+/).map((m) => m.toLowerCase());
+  const valid: AaaLoginMethod[] = ['local', 'local-case', 'enable', 'none'];
+  return methods.every((m): m is AaaLoginMethod => (valid as string[]).includes(m)) ? methods : null;
+}
+
+function ensureSnooping(state: DeviceState) {
+  return (state.dhcpSnooping ??= { enabled: false, vlans: [], optionInsert: true });
+}
+
+function addVlans(list: number[], add: number[]): number[] {
+  return [...new Set([...list, ...add])].sort((a, b) => a - b);
+}
+
+/** Hardening, management-API and telemetry commands shared by switches and routers. */
+const GLOBAL_HARDENING: Def[] = [
+  { pattern: 'security passwords min-length <length>', help: 'Minimum length of passwords', run: ({ state }, a) => { const n = Number(a.length); if (!/^\d+$/.test(a.length) || n < 0 || n > 16) return [INVALID_INPUT]; state.minPasswordLength = n; } },
+  { pattern: 'no security passwords min-length', help: 'Remove the minimum password length', run: ({ state }) => void (state.minPasswordLength = undefined) },
+  { pattern: 'login block-for <seconds> attempts <tries> within <within>', help: 'Set quiet-mode active time period', run: ({ state }, a) => { const s = Number(a.seconds), t = Number(a.tries), w = Number(a.within); if (![a.seconds, a.tries, a.within].every((x) => /^\d+$/.test(x)) || s < 1 || s > 65535 || t < 1 || t > 65535 || w < 1 || w > 65535) return [INVALID_INPUT]; state.loginBlock = { seconds: s, attempts: t, within: w }; } },
+  { pattern: 'no login block-for', help: 'Disable login blocking', run: ({ state }) => void (state.loginBlock = undefined) },
+  { pattern: 'login on-failure log', help: 'Generate a syslog message on failed logins', run: () => undefined },
+  { pattern: 'login on-success log', help: 'Generate a syslog message on successful logins', run: () => undefined },
+  { pattern: 'aaa new-model', help: 'Enable NEW access control commands and functions.(Disables OLD commands.)', run: ({ state }) => void (state.aaaNewModel = true) },
+  { pattern: 'no aaa new-model', help: 'Disable the AAA access control model', run: ({ state }) => { state.aaaNewModel = false; state.aaaLoginDefault = undefined; } },
+  { pattern: 'aaa authentication login default <methods...>', help: 'The default authentication list.', run: ({ state }, a) => { if (!state.aaaNewModel) return ['% AAA is not enabled. Configure aaa new-model first.']; const m = parseAaaMethods(a.methods); if (!m) return [INVALID_INPUT]; state.aaaLoginDefault = m; } },
+  { pattern: 'no aaa authentication login default', help: 'Remove the default authentication list', run: ({ state }) => void (state.aaaLoginDefault = undefined) },
+  { pattern: 'ip http server', help: 'Enable HTTP server', run: ({ state }) => void (state.httpServer = true) },
+  { pattern: 'no ip http server', help: 'Disable HTTP server', run: ({ state }) => void (state.httpServer = false) },
+  { pattern: 'ip http secure-server', help: 'Enable HTTP secure server', run: ({ state }) => void (state.httpSecureServer = true) },
+  { pattern: 'no ip http secure-server', help: 'Disable HTTP secure server', run: ({ state }) => void (state.httpSecureServer = false) },
+  { pattern: 'ip http authentication local', help: 'Use the local user database for HTTP access', run: ({ state }) => void (state.httpAuthLocal = true) },
+  { pattern: 'no ip http authentication local', help: 'Stop using the local user database for HTTP access', run: ({ state }) => void (state.httpAuthLocal = false) },
+  { pattern: 'restconf', help: 'Enable RESTCONF', run: ({ state }) => void (state.restconf = true) },
+  { pattern: 'no restconf', help: 'Disable RESTCONF', run: ({ state }) => void (state.restconf = false) },
+  { pattern: 'netconf-yang', help: 'Enable NETCONF-YANG', run: ({ state }) => void (state.netconfYang = true) },
+  { pattern: 'no netconf-yang', help: 'Disable NETCONF-YANG', run: ({ state }) => void (state.netconfYang = false) },
+  { pattern: 'logging host <address>', help: 'Set syslog server IP address and parameters', run: ({ state }, a) => { if (!isValidIp(a.address)) return [INVALID_INPUT]; if (!state.loggingHosts.includes(a.address)) state.loggingHosts.push(a.address); } },
+  { pattern: 'logging <address>', help: 'Set syslog server IP address', run: ({ state }, a) => { if (!isValidIp(a.address)) return [INVALID_INPUT]; if (!state.loggingHosts.includes(a.address)) state.loggingHosts.push(a.address); } },
+  { pattern: 'no logging host <address>', help: 'Remove a syslog server', run: ({ state }, a) => void (state.loggingHosts = state.loggingHosts.filter((h) => h !== a.address)) },
+  { pattern: 'logging trap <level>', help: 'Set syslog server logging level', run: ({ state }, a) => { const l = parseSyslogLevel(a.level); if (!l) return [INVALID_INPUT]; state.loggingTrap = l; } },
+  { pattern: 'no logging trap', help: 'Reset the syslog server logging level', run: ({ state }) => void (state.loggingTrap = undefined) },
+  { pattern: 'logging buffered <size>', help: 'Set buffered logging parameters', run: () => undefined },
+  { pattern: 'logging console', help: 'Set console logging parameters', run: () => undefined },
+  { pattern: 'no logging console', help: 'Disable console logging', run: () => undefined },
+  { pattern: 'service timestamps log datetime msec', help: 'Timestamp log messages', run: () => undefined },
+  { pattern: 'service timestamps debug datetime msec', help: 'Timestamp debug messages', run: () => undefined },
+  { pattern: 'snmp-server community <name> <mode>', help: 'Enable SNMP; set community string and access privs', run: ({ state }, a) => { const m = a.mode.toLowerCase(); if (m !== 'ro' && m !== 'rw') return [INVALID_INPUT]; state.snmpCommunities = state.snmpCommunities.filter((c) => c.name !== a.name); state.snmpCommunities.push({ name: a.name, mode: m }); } },
+  { pattern: 'snmp-server community <name>', help: 'Enable SNMP; set community string (read-only)', run: ({ state }, a) => { state.snmpCommunities = state.snmpCommunities.filter((c) => c.name !== a.name); state.snmpCommunities.push({ name: a.name, mode: 'ro' }); } },
+  { pattern: 'no snmp-server community <name>', help: 'Remove a community string', run: ({ state }, a) => void (state.snmpCommunities = state.snmpCommunities.filter((c) => c.name !== a.name)) },
+  { pattern: 'snmp-server location <text...>', help: 'Text for mib object sysLocation', run: ({ state }, a) => void (state.snmpLocation = a.text) },
+  { pattern: 'snmp-server contact <text...>', help: 'Text for mib object sysContact', run: ({ state }, a) => void (state.snmpContact = a.text) },
+  { pattern: 'no snmp-server', help: 'Disable the SNMP agent', run: ({ state }) => { state.snmpCommunities = []; state.snmpLocation = undefined; state.snmpContact = undefined; } },
+  { pattern: 'ntp server <address>', help: 'Configure NTP server', run: ({ state }, a) => { if (!isValidIp(a.address)) return [INVALID_INPUT]; if (!state.ntpServers.includes(a.address)) state.ntpServers.push(a.address); } },
+  { pattern: 'no ntp server <address>', help: 'Remove an NTP server', run: ({ state }, a) => void (state.ntpServers = state.ntpServers.filter((s) => s !== a.address)) },
+];
 
 function parseBanner(text: string): string {
   const delim = text[0];
@@ -757,8 +899,8 @@ function generateRsa(state: DeviceState, bits: number): string[] {
 
 const GLOBAL_COMMON: Def[] = [
   { pattern: 'no hostname', help: 'Reset the hostname', run: ({ state }) => void (state.hostname = state.deviceType === 'router' ? 'Router' : 'Switch') },
-  { pattern: 'enable password <password...>', help: 'Assign the privileged level password', run: ({ state }, a) => void (state.enablePassword = a.password) },
-  { pattern: 'enable secret <secret...>', help: 'Assign the privileged level secret', run: ({ state }, a) => void (state.enableSecret = a.secret) },
+  { pattern: 'enable password <password...>', help: 'Assign the privileged level password', run: ({ state }, a) => tooShort(state, a.password) ?? void (state.enablePassword = a.password) },
+  { pattern: 'enable secret <secret...>', help: 'Assign the privileged level secret', run: ({ state }, a) => tooShort(state, a.secret) ?? void (state.enableSecret = a.secret) },
   { pattern: 'no enable password', help: 'Remove the privileged level password', run: ({ state }) => void (state.enablePassword = undefined) },
   { pattern: 'no enable secret', help: 'Remove the privileged level secret', run: ({ state }) => void (state.enableSecret = undefined) },
   { pattern: 'banner motd <text...>', help: 'Set Message of the Day banner', run: ({ state }, a) => void (state.bannerMotd = parseBanner(a.text)) },
@@ -777,6 +919,7 @@ const GLOBAL_COMMON: Def[] = [
   { pattern: 'crypto key zeroize rsa', help: 'Remove RSA keys', run: ({ state }) => void (state.rsaKeyBits = undefined) },
   { pattern: 'service password-encryption', help: 'Encrypt system passwords', run: ({ state }) => void (state.servicePasswordEncryption = true) },
   { pattern: 'no service password-encryption', help: 'Stop encrypting system passwords', run: ({ state }) => void (state.servicePasswordEncryption = false) },
+  ...GLOBAL_HARDENING,
   { pattern: 'exit', help: 'Exit from configure mode', run: ({ state }) => leaveConfig(state) },
   ...EXIT_CONFIG,
 ];
@@ -794,6 +937,15 @@ export const GLOBAL_CONFIG: Def[] = [
   { pattern: 'spanning-tree vlan <list> root secondary', help: 'Configure switch as secondary root', run: ({ state }, a) => { const list = parseVlanList(a.list); if (!list) return [INVALID_INPUT]; for (const v of list) state.stpPriority[v] = 28672; } },
   { pattern: 'no spanning-tree vlan <list> root', help: 'Reset the root configuration', run: ({ state }, a) => { const list = parseVlanList(a.list); if (!list) return [INVALID_INPUT]; for (const v of list) delete state.stpPriority[v]; } },
   { pattern: 'spanning-tree extend system-id', help: 'Extend system-id into priority portion of the bridge id', run: () => undefined },
+  // DHCP snooping and dynamic ARP inspection
+  { pattern: 'ip dhcp snooping', help: 'DHCP Snooping', run: ({ state }) => void (ensureSnooping(state).enabled = true) },
+  { pattern: 'no ip dhcp snooping', help: 'Disable DHCP snooping', run: ({ state }) => void (ensureSnooping(state).enabled = false) },
+  { pattern: 'ip dhcp snooping vlan <list>', help: 'DHCP Snooping vlan', run: ({ state }, a) => { const list = parseVlanList(a.list); if (!list) return [INVALID_INPUT]; const s = ensureSnooping(state); s.vlans = addVlans(s.vlans, list); } },
+  { pattern: 'no ip dhcp snooping vlan <list>', help: 'Stop snooping a VLAN', run: ({ state }, a) => { const list = parseVlanList(a.list); if (!list) return [INVALID_INPUT]; const s = ensureSnooping(state); s.vlans = s.vlans.filter((v) => !list.includes(v)); } },
+  { pattern: 'ip dhcp snooping information option', help: 'DHCP Snooping information option', run: ({ state }) => void (ensureSnooping(state).optionInsert = true) },
+  { pattern: 'no ip dhcp snooping information option', help: 'Stop inserting option 82', run: ({ state }) => void (ensureSnooping(state).optionInsert = false) },
+  { pattern: 'ip arp inspection vlan <list>', help: 'Enable/Disable ARP Inspection on vlans', run: ({ state }, a) => { const list = parseVlanList(a.list); if (!list) return [INVALID_INPUT]; state.arpInspectionVlans = addVlans(state.arpInspectionVlans, list); } },
+  { pattern: 'no ip arp inspection vlan <list>', help: 'Disable ARP inspection on vlans', run: ({ state }, a) => { const list = parseVlanList(a.list); if (!list) return [INVALID_INPUT]; state.arpInspectionVlans = state.arpInspectionVlans.filter((v) => !list.includes(v)); } },
 ];
 
 function addStaticRoute(state: DeviceState, dest: string, mask: string, via: string, ad?: string): string[] | void {
@@ -1114,6 +1266,13 @@ export const INTERFACE_CONFIG: Def[] = [
   { pattern: 'switchport port-security mac-address <mac>', help: 'Secure mac address', run: ({ state }, a) => { const mac = normalizeMac(a.mac); if (!mac) return [INVALID_INPUT]; return l2(state, (i) => { const ps = ensurePortSecurity(i); if (ps.staticMacs.length + ps.stickyMacs.length >= ps.maximum && !ps.staticMacs.includes(mac)) return ['% Total secure mac-addresses on interface exceeds the maximum allowed']; if (!ps.staticMacs.includes(mac)) ps.staticMacs.push(mac); }); } },
   { pattern: 'no switchport port-security mac-address <mac>', help: 'Remove a secure mac address', run: ({ state }, a) => { const mac = normalizeMac(a.mac); if (!mac) return [INVALID_INPUT]; return l2(state, (i) => { const ps = ensurePortSecurity(i); ps.staticMacs = ps.staticMacs.filter((m) => m !== mac); ps.stickyMacs = ps.stickyMacs.filter((m) => m !== mac); }); } },
   { pattern: 'no switchport port-security mac-address sticky <mac>', help: 'Remove a sticky secure mac address', run: ({ state }, a) => { const mac = normalizeMac(a.mac); if (!mac) return [INVALID_INPUT]; return l2(state, (i) => { const ps = ensurePortSecurity(i); ps.stickyMacs = ps.stickyMacs.filter((m) => m !== mac); }); } },
+  // DHCP snooping and dynamic ARP inspection trust
+  { pattern: 'ip dhcp snooping trust', help: 'DHCP Snooping trust config', run: ({ state }) => l2(state, (i) => void (i.dhcpSnoopingTrust = true)) },
+  { pattern: 'no ip dhcp snooping trust', help: 'Make the port untrusted', run: ({ state }) => l2(state, (i) => void (i.dhcpSnoopingTrust = undefined)) },
+  { pattern: 'ip dhcp snooping limit rate <rate>', help: 'DHCP Snooping rate limit', run: ({}, a) => (/^\d+$/.test(a.rate) ? undefined : [INVALID_INPUT]) },
+  { pattern: 'ip arp inspection trust', help: 'Configure Trust state', run: ({ state }) => l2(state, (i) => void (i.arpInspectionTrust = true)) },
+  { pattern: 'no ip arp inspection trust', help: 'Make the port untrusted', run: ({ state }) => l2(state, (i) => void (i.arpInspectionTrust = undefined)) },
+  { pattern: 'ip arp inspection limit rate <rate>', help: 'Configure rate limit', run: ({}, a) => (/^\d+$/.test(a.rate) ? undefined : [INVALID_INPUT]) },
   ...SWITCH_JUMPS,
 ];
 
@@ -1213,14 +1372,15 @@ function currentLine(state: DeviceState) {
 
 function lineConfig(jumps: Def[]): Def[] {
   return [
-    { pattern: 'password <password...>', help: 'Set a password', run: ({ state }, a) => void (currentLine(state).password = a.password) },
+    { pattern: 'password <password...>', help: 'Set a password', run: ({ state }, a) => tooShort(state, a.password) ?? void (currentLine(state).password = a.password) },
     { pattern: 'no password', help: 'Remove the password', run: ({ state }) => void (currentLine(state).password = undefined) },
     { pattern: 'login', help: 'Enable password checking', run: ({ state }) => { const l = currentLine(state); if (!l.password) return ["% Login disabled on line, until 'password' is set"]; l.login = true; } },
     { pattern: 'login local', help: 'Local password checking', run: ({ state }) => void (currentLine(state).login = 'local') },
     { pattern: 'no login', help: 'Disable password checking', run: ({ state }) => void (currentLine(state).login = false) },
     { pattern: 'transport input <protocol>', help: 'Define which protocols to use to connect to a specific line', run: ({ state }, a) => { const p = a.protocol.toLowerCase(); if (!['all', 'ssh', 'telnet', 'none'].includes(p)) return [INVALID_INPUT]; currentLine(state).transportInput = p as 'all' | 'ssh' | 'telnet' | 'none'; } },
-    { pattern: 'exec-timeout <minutes> <seconds>', help: 'Set the EXEC timeout', run: () => undefined },
-    { pattern: 'exec-timeout <minutes>', help: 'Set the EXEC timeout', run: () => undefined },
+    { pattern: 'exec-timeout <minutes> <seconds>', help: 'Set the EXEC timeout', run: ({ state }, a) => { const m = Number(a.minutes), s = Number(a.seconds); if (!/^\d+$/.test(a.minutes) || !/^\d+$/.test(a.seconds) || m > 35791 || s > 2147483) return [INVALID_INPUT]; currentLine(state).execTimeout = { minutes: m, seconds: s }; } },
+    { pattern: 'exec-timeout <minutes>', help: 'Set the EXEC timeout', run: ({ state }, a) => { const m = Number(a.minutes); if (!/^\d+$/.test(a.minutes) || m > 35791) return [INVALID_INPUT]; currentLine(state).execTimeout = { minutes: m, seconds: 0 }; } },
+    { pattern: 'no exec-timeout', help: 'Reset the EXEC timeout to 10 minutes', run: ({ state }) => void (currentLine(state).execTimeout = undefined) },
     { pattern: 'logging synchronous', help: 'Synchronized message output', run: () => undefined },
     { pattern: 'access-class <acl> in', help: 'Filter connections based on an IP access list', run: ({ state }, a) => { if (state.currentLine !== 'vty') return ['% access-class is only supported on VTY lines.']; currentLine(state).accessClass = a.acl; } },
     { pattern: 'no access-class <acl> in', help: 'Remove the access class', run: ({ state }) => void (currentLine(state).accessClass = undefined) },

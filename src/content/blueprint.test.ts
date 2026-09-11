@@ -31,8 +31,13 @@ describe('CCNA blueprint', () => {
     expect(access.percent).toBe(0);
     expect(access.topics).toEqual(['2.1', '2.2', '2.4', '2.5']);
     const automation = none.find((d) => d.id === '6')!;
-    expect(automation.labs).toBe(0);
-    expect(automation.modules).toEqual([]);
+    expect(automation.modules.map((m) => m.id)).toEqual(['learn-automation']);
+    expect(automation.topics).toEqual(['6.4', '6.5', '6.7']);
+    // A domain nobody maps to reports zero labs rather than pretending.
+    const uncovered = domainCoverage(modules.filter((m) => m.id !== 'learn-automation'), labs, {}).find((d) => d.id === '6')!;
+    expect(uncovered.labs).toBe(0);
+    expect(uncovered.modules).toEqual([]);
+    expect(uncovered.percent).toBe(0);
 
     const switching = labs.filter((l) => l.moduleId === 'learn-switching');
     const progress = Object.fromEntries(switching.map((l) => [l.id, { score: 100, stars: 3, completedAt: '' }]));

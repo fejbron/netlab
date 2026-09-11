@@ -172,6 +172,28 @@ describe('reference solutions pass', () => {
     ],
   };
 
+  const GET_IFS = 'PC-A: curl -k -u netops:Aut0mate! https://192.168.1.1/restconf/data/ietf-interfaces:interfaces';
+  const PATCH_G00 = `PC-A: curl -k -i -u netops:Aut0mate! -X PATCH -H 'Content-Type: application/yang-data+json' -d '{"ietf-interfaces:interface": {"name": "GigabitEthernet0/0", "description": "Sales LAN"}}' https://192.168.1.1/restconf/data/ietf-interfaces:interfaces/interface=GigabitEthernet0%2F0`;
+  Object.assign(solutions, {
+    'ns-01-password-policy': ['en', 'conf t', 'security passwords min-length 10', 'enable secret cisco', 'enable secret Edge-R1-S3cret', 'login block-for 120 attempts 3 within 60', 'line con 0', 'exec-timeout 5 0', 'line vty 0 4', 'exec-timeout 5 0', 'exit', 'service password-encryption', 'end', 'show login'],
+    'ns-02-aaa-local': ['enable', 'Edge-R1-S3cret', 'conf t', 'aaa new-model', 'aaa authentication login default local', 'username netops privilege 15 secret Aut0mate-Edge', 'ip domain-name lab.local', 'crypto key generate rsa modulus 2048', 'ip ssh version 2', 'line vty 0 4', 'transport input ssh', 'end', 'write memory'],
+    'ns-03-dhcp-snooping': ['PC-A: ipconfig /renew', 'en', 'conf t', 'ip dhcp snooping', 'ip dhcp snooping vlan 10', 'no ip dhcp snooping information option', 'end', 'PC-A: ipconfig /renew', 'conf t', 'int g0/8', 'ip dhcp snooping trust', 'end', 'PC-A: ipconfig /renew', 'show ip dhcp snooping', 'show ip dhcp snooping binding'],
+    'ns-04-dynamic-arp-inspection': ['en', 'conf t', 'ip arp inspection vlan 10', 'int g0/8', 'ip arp inspection trust', 'end', 'PC-A: ping 192.168.10.1', 'show ip arp inspection vlan 10', 'show ip arp inspection interfaces'],
+    'ns-05-dai-static-server': ['SRV1: ping 192.168.10.1', 'en', 'show ip arp inspection interfaces', 'conf t', 'int g0/3', 'ip arp inspection trust', 'end', 'SRV1: ping 192.168.10.1', 'PC-A: ping 192.168.10.1'],
+    'ns-06-exam-harden-the-branch': [
+      'en', 'conf t', 'security passwords min-length 10', 'enable secret Br4nch-Secret', 'login block-for 120 attempts 3 within 60', 'aaa new-model', 'aaa authentication login default local', 'username netops privilege 15 secret Aut0mate-Edge', 'ip domain-name lab.local', 'crypto key generate rsa modulus 2048', 'ip ssh version 2', 'access-list 5 permit host 192.168.10.50', 'line vty 0 4', 'transport input ssh', 'access-class 5 in', 'exec-timeout 5 0', 'line con 0', 'exec-timeout 5 0', 'exit', 'service password-encryption', 'end', 'write memory',
+      'SW1: en', 'SW1: conf t', 'SW1: ip dhcp snooping', 'SW1: ip dhcp snooping vlan 10', 'SW1: no ip dhcp snooping information option', 'SW1: ip arp inspection vlan 10', 'SW1: int g0/8', 'SW1: ip dhcp snooping trust', 'SW1: ip arp inspection trust', 'SW1: int g0/3', 'SW1: ip arp inspection trust', 'SW1: interface range g0/1 - 2', 'SW1: switchport port-security', 'SW1: switchport port-security maximum 1', 'SW1: switchport port-security mac-address sticky', 'SW1: end',
+      'PC-A: ipconfig /renew', 'PC-A: ping 192.168.10.50', 'SRV1: ping 192.168.10.1', 'SW1: write memory',
+    ],
+    'au-01-enable-the-api': [GET_IFS, 'en', 'conf t', 'username netops privilege 15 secret Aut0mate!', 'ip http secure-server', 'ip http authentication local', 'restconf', 'ip domain-name lab.local', 'crypto key generate rsa modulus 2048', 'netconf-yang', 'end', 'show platform software yang-management process', GET_IFS],
+    'au-02-read-the-device-as-json': ['PC-A: curl -k -u netops:Aut0mate! https://192.168.1.1/restconf/data/ietf-interfaces:interfaces/interface=GigabitEthernet0%2F1', 'PC-A: curl -k -u netops:Aut0mate! https://192.168.1.1/restconf/data/Cisco-IOS-XE-native:native/hostname', 'en', 'conf t', 'int g0/1', 'no shutdown', 'end', 'ping 10.0.0.2'],
+    'au-03-configure-through-the-api': [PATCH_G00, `PC-A: curl -k -i -u netops:Aut0mate! -X PATCH -H 'Content-Type: application/yang-data+json' -d '{"Cisco-IOS-XE-native:hostname": "Branch-R1"}' https://192.168.1.1/restconf/data/Cisco-IOS-XE-native:native/hostname`, 'en', 'show running-config'],
+    'au-04-deploy-from-a-json-intent': ['en', 'conf t', 'hostname Site2-R2', 'int g0/0', 'description Site 2 LAN', 'ip address 192.168.2.1 255.255.255.0', 'no shutdown', 'int g0/1', 'description Link to R1', 'ip address 10.0.0.2 255.255.255.252', 'no shutdown', 'exit', 'ip route 192.168.1.0 255.255.255.0 10.0.0.1', 'ntp server 192.168.2.50', 'end', 'SRV1: ping 192.168.1.10'],
+    'au-05-telemetry-for-the-assistant': ['en', 'conf t', 'logging host 192.168.2.50', 'logging trap informational', 'snmp-server community NetOps-RO ro', 'snmp-server location Branch 1 comms room', 'snmp-server contact netops@example.com', 'ntp server 192.168.2.50', 'end', 'show logging', 'show ntp status'],
+    'au-06-review-the-ai-change': ['PC-B: ping 192.168.2.50', 'PC-A: ping 192.168.2.50', 'en', 'conf t', 'ip access-list extended GUEST-POLICY', 'deny ip 192.168.3.0 0.0.0.255 host 192.168.2.50', 'permit ip any any', 'int g0/2', 'ip access-group GUEST-POLICY in', 'end', 'PC-B: ping 192.168.2.50', 'PC-A: ping 192.168.2.50', 'PC-B: ping 10.0.0.2'],
+    'au-07-exam-automation-ready-branch': ['en', 'conf t', 'username netops privilege 15 secret Aut0mate!', 'ip http secure-server', 'ip http authentication local', 'restconf', 'ip domain-name lab.local', 'crypto key generate rsa modulus 2048', 'ip ssh version 2', 'netconf-yang', 'logging host 192.168.2.50', 'logging trap informational', 'snmp-server community NetOps-RO ro', 'ntp server 192.168.2.50', 'end', GET_IFS, PATCH_G00, 'write memory'],
+  });
+
   it('covers every lab', () => {
     expect(Object.keys(solutions).sort()).toEqual(labs.map((l) => l.id).sort());
   });

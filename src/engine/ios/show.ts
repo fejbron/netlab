@@ -74,10 +74,46 @@ export function renderConfigBody(state: DeviceState): string[] {
 
 function pushLineConfig(state: DeviceState, o: string[], l: DeviceState['lines']['con']) {
   if (l.accessClass) o.push(` access-class ${l.accessClass} in`);
+  if (l.execTimeout) o.push(` exec-timeout ${l.execTimeout.minutes} ${l.execTimeout.seconds}`);
   if (l.password) o.push(` password ${pw(state, l.password)}`);
   if (l.login === true) o.push(' login');
-  if (l.login === 'local') o.push(' login local');
+  if (l.login === 'local' && !state.aaaNewModel) o.push(' login local');
   if (l.transportInput && l.transportInput !== 'all') o.push(` transport input ${l.transportInput}`);
+}
+
+/** Password policy, AAA and login hardening, printed near the top of the config like IOS does. */
+function pushHardeningConfig(state: DeviceState, out: string[]) {
+  if (state.minPasswordLength !== undefined) out.push(`security passwords min-length ${state.minPasswordLength}`);
+  if (state.loginBlock) out.push(`login block-for ${state.loginBlock.seconds} attempts ${state.loginBlock.attempts} within ${state.loginBlock.within}`);
+  if (state.minPasswordLength !== undefined || state.loginBlock) out.push('!');
+  if (state.aaaNewModel) {
+    out.push('aaa new-model');
+    if (state.aaaLoginDefault?.length) out.push(`aaa authentication login default ${state.aaaLoginDefault.join(' ')}`);
+    out.push('!', 'aaa session-id common');
+  } else out.push('no aaa new-model');
+}
+
+/** HTTP server, programmable interfaces, syslog, SNMP and NTP, printed before the lines. */
+function pushManagementConfig(state: DeviceState, out: string[]) {
+  out.push(state.httpServer ? 'ip http server' : 'no ip http server');
+  if (state.httpAuthLocal) out.push('ip http authentication local');
+  out.push(state.httpSecureServer ? 'ip http secure-server' : 'no ip http secure-server');
+  out.push('!');
+  if (state.loggingTrap) out.push(`logging trap ${state.loggingTrap}`);
+  for (const h of state.loggingHosts) out.push(`logging host ${h}`);
+  if (state.loggingTrap || state.loggingHosts.length) out.push('!');
+  for (const c of state.snmpCommunities) out.push(`snmp-server community ${c.name} ${c.mode.toUpperCase()}`);
+  if (state.snmpLocation) out.push(`snmp-server location ${state.snmpLocation}`);
+  if (state.snmpContact) out.push(`snmp-server contact ${state.snmpContact}`);
+  if (state.snmpCommunities.length || state.snmpLocation || state.snmpContact) out.push('!');
+  if (state.restconf) out.push('restconf');
+  if (state.netconfYang) out.push('netconf-yang');
+  if (state.restconf || state.netconfYang) out.push('!');
+}
+
+function pushNtpConfig(state: DeviceState, out: string[]) {
+  for (const s of state.ntpServers) out.push(`ntp server ${s}`);
+  if (state.ntpServers.length) out.push('!');
 }
 
 function pushAclConfig(state: DeviceState, out: string[]) {
@@ -120,7 +156,8 @@ function renderRouterConfigBody(state: DeviceState): string[] {
   out.push(state.servicePasswordEncryption ? 'service password-encryption' : 'no service password-encryption');
   out.push('!', `hostname ${state.hostname}`, '!', 'boot-start-marker', 'boot-end-marker', '!');
   pushSecurityConfig(state, out);
-  out.push('no aaa new-model', '!');
+  pushHardeningConfig(state, out);
+  out.push('!');
   if (state.ipDomainName) out.push(`ip domain-name ${state.ipDomainName}`, '!');
   if (state.sshVersion) out.push(`ip ssh version ${state.sshVersion}`, '!');
   out.push('ip cef', state.ipv6UnicastRouting ? 'ipv6 unicast-routing' : 'no ipv6 cef', '!');
@@ -183,8 +220,100 @@ function renderRouterConfigBody(state: DeviceState): string[] {
   if (Object.keys(state.natPools).length || state.natDynamic || state.natStatic.length) out.push('!');
   for (const r of state.staticRoutes6) out.push(`ipv6 route ${r.prefix}/${r.length} ${r.exitInterface ? `${r.exitInterface}${r.nextHop ? ` ${r.nextHop}` : ''}` : r.nextHop}`);
   if (state.staticRoutes6.length) out.push('!');
+  pushManagementConfig(state, out);
   pushAclConfig(state, out);
+  pushNtpConfig(state, out);
   pushTail(state, out);
+  return out;
+}
+
+function vlanListText(vlans: number[]): string {
+  return formatVlanList([...vlans].sort((a, b) => a - b)) || 'none';
+}
+
+export function showIpDhcpSnooping(state: DeviceState): string[] {
+  const s = state.dhcpSnooping;
+  const out = [`Switch DHCP snooping is ${s?.enabled ? 'enabled' : 'disabled'}`, 'Switch DHCP gleaning is disabled', 'DHCP snooping is configured on following VLANs:', s?.vlans.length ? vlanListText(s.vlans) : 'none', 'DHCP snooping is operational on following VLANs:', s?.enabled && s.vlans.length ? vlanListText(s.vlans) : 'none', 'DHCP snooping is configured on the following L3 Interfaces:', '', `Insertion of option 82 is ${s?.optionInsert === false ? 'disabled' : 'enabled'}`, '   circuit-id default format: vlan-mod-port', `   remote-id: ${state.mac} (MAC)`, 'Option 82 on untrusted port is not allowed', 'Verification of hwaddr field is enabled', 'Verification of giaddr field is enabled', 'DHCP snooping trust/rate is configured on the following Interfaces:', '', 'Interface                  Trusted    Allow option    Rate limit (pps)', '-----------------------    -------    ------------    ----------------'];
+  const trusted = physicalInterfaces(state).filter((i) => i.dhcpSnoopingTrust);
+  for (const i of trusted) out.push(`${i.name.padEnd(27)}yes        yes             unlimited`);
+  return out;
+}
+
+export function showIpDhcpSnoopingBinding(rows: Array<{ mac: string; ip: string; vlan: number; interface: string }>): string[] {
+  const out = ['MacAddress          IpAddress        Lease(sec)  Type           VLAN  Interface', '------------------  ---------------  ----------  -------------  ----  --------------------'];
+  for (const r of rows) {
+    const mac = r.mac.replace(/\./g, '').match(/.{2}/g)!.join(':').toUpperCase();
+    out.push(`${mac.padEnd(20)}${r.ip.padEnd(17)}${'86400'.padEnd(12)}${'dhcp-snooping'.padEnd(15)}${String(r.vlan).padEnd(6)}${r.interface}`);
+  }
+  out.push(`Total number of bindings: ${rows.length}`);
+  return out;
+}
+
+export function showIpArpInspection(state: DeviceState, vlan?: number): string[] {
+  const out = ['Source Mac Validation      : Disabled', 'Destination Mac Validation : Disabled', 'IP Address Validation      : Disabled', '', ' Vlan     Configuration    Operation   ACL Match          Static ACL', ' ----     -------------    ---------   ---------          ----------'];
+  const vlans = vlan !== undefined ? [vlan] : Object.keys(state.vlans).map(Number).filter((v) => v < 1002);
+  for (const v of vlans.sort((a, b) => a - b)) {
+    const on = state.arpInspectionVlans.includes(v);
+    out.push(` ${String(v).padStart(4)}     ${(on ? 'Enabled' : 'Disabled').padEnd(17)}${on ? 'Active' : 'Inactive'}`);
+  }
+  return out;
+}
+
+export function showIpArpInspectionInterfaces(state: DeviceState): string[] {
+  const out = [' Interface        Trust State     Rate (pps)    Burst Interval', ' ---------------  -----------     ----------    --------------'];
+  for (const i of physicalInterfaces(state)) out.push(` ${shortInterfaceName(i.name).padEnd(17)}${(i.arpInspectionTrust ? 'Trusted' : 'Untrusted').padEnd(16)}${(i.arpInspectionTrust ? 'None' : '15').padStart(10)}${(i.arpInspectionTrust ? 'N/A' : '1').padStart(18)}`);
+  return out;
+}
+
+export function showLogin(state: DeviceState): string[] {
+  const out = ['A default login delay of 1 second is applied.', 'No Quiet-Mode access list has been configured.', ''];
+  const b = state.loginBlock;
+  if (!b) return [...out, 'Router NOT enabled to watch for login Attacks'];
+  return [...out, 'Router enabled to watch for login Attacks.', `If more than ${b.attempts} login failures occur in ${b.within} seconds or less,`, `logins will be disabled for ${b.seconds} seconds.`, '', 'Router presently in Normal-Mode.', 'Current Watch Window', '    Time remaining: 60 seconds.', '    Login failures for current window: 0.', 'Total login failures: 0.'];
+}
+
+export function showLogging(state: DeviceState): string[] {
+  const level = state.loggingTrap ?? 'informational';
+  const out = ['Syslog logging: enabled (0 messages dropped, 0 messages rate-limited, 0 flushes, 0 overruns, xml disabled, filtering disabled)', '', 'No Active Message Discriminator.', '', '    Console logging: level debugging, 42 messages logged, xml disabled,', '                     filtering disabled', '    Monitor logging: level debugging, 0 messages logged, xml disabled,', '                     filtering disabled', '    Buffer logging:  level debugging, 42 messages logged, xml disabled,', '                    filtering disabled', '    Exception Logging: size (4096 bytes)', '    Count and timestamp logging messages: disabled', '    Persistent logging: disabled', '', `    Trap logging: level ${level}, ${state.loggingHosts.length ? 45 : 0} message lines logged`];
+  for (const h of state.loggingHosts) out.push(`        Logging to ${h}  (udp port 514, audit disabled,`, '              link up),', '              45 message lines logged,', '              0 message lines rate-limited,', '              0 message lines dropped-by-MD,', '              xml disabled, sequence number disabled', '              filtering disabled');
+  if (!state.loggingHosts.length) out.push('        Logging Source-Interface:       VRF Name:');
+  return out;
+}
+
+export function showNtpStatus(state: DeviceState, synced: boolean): string[] {
+  const ref = state.ntpServers[0];
+  if (!ref || !synced) return ['Clock is unsynchronized, stratum 16, no reference clock', 'nominal freq is 250.0000 Hz, actual freq is 250.0000 Hz, precision is 2**10', 'ntp uptime is 12300 (1/100 of seconds), resolution is 4000', 'reference time is 00000000.00000000 (00:00:00.000 UTC Mon Jan 1 1900)', 'clock offset is 0.0000 msec, root delay is 0.00 msec', 'root dispersion is 0.00 msec, peer dispersion is 0.00 msec', 'loopfilter state is \'FSET\' (Drift set from file), drift is 0.000000000 s/s', 'system poll interval is 64, never updated.'];
+  return [`Clock is synchronized, stratum 3, reference is ${ref}`, 'nominal freq is 250.0000 Hz, actual freq is 250.0000 Hz, precision is 2**10', 'ntp uptime is 12300 (1/100 of seconds), resolution is 4000', 'reference time is EC8A3F21.2B7F3C10 (09:00:01.169 UTC Thu Sep 11 2026)', 'clock offset is 0.2871 msec, root delay is 1.15 msec', 'root dispersion is 3.61 msec, peer dispersion is 0.98 msec', 'loopfilter state is \'CTRL\' (Normal Controlled Loop), drift is 0.000000004 s/s', 'system poll interval is 64, last update was 12 sec ago.'];
+}
+
+export function showNtpAssociations(state: DeviceState, reachable: (server: string) => boolean): string[] {
+  const out = ['  address         ref clock       st   when   poll reach  delay  offset   disp', '', ...[]];
+  for (const s of state.ntpServers) {
+    const ok = reachable(s);
+    out.push(`${ok ? '*~' : ' ~'}${s.padEnd(16)}${(ok ? '10.0.0.100' : '.INIT.').padEnd(16)}${ok ? ' 2' : '16'}     ${ok ? '12' : ' -'}     64   ${ok ? '377' : '  0'}  ${ok ? '1.150' : '0.000'}   ${ok ? '0.287' : '0.000'}  ${ok ? '0.98' : '15937'}`);
+  }
+  out.push(' * sys.peer, # selected, + candidate, - outlyer, x falseticker, ~ configured');
+  return out;
+}
+
+export function showSnmpCommunity(state: DeviceState): string[] {
+  if (!state.snmpCommunities.length) return ['%SNMP agent not enabled'];
+  const out: string[] = [];
+  for (const c of state.snmpCommunities) out.push(`Community name: ${c.name}`, `Community Index: ${c.name}`, `Community SecurityName: ${c.name}`, 'storage-type: nonvolatile        active', '');
+  return out;
+}
+
+/** IOS-XE "show platform software yang-management process": which programmability daemons run. */
+export function showYangProcesses(state: DeviceState): string[] {
+  const any = state.restconf || state.netconfYang;
+  const row = (name: string, running: boolean) => `${name.padEnd(17)}: ${running ? 'Running' : 'Not Running'}`;
+  return [row('confd', any), row('nesd', any), row('syncfd', any), row('ncsshd', state.netconfYang), row('dmiauthd', any), row('nginx', state.restconf || state.httpSecureServer), row('ndbmand', any), row('pubd', any)];
+}
+
+export function showRestconfRequests(state: DeviceState): string[] {
+  if (!state.apiRequests.length) return ['No RESTCONF requests have been answered.'];
+  const out = ['Method  Status  User        Path', '------  ------  ----------  ----------------------------------------------'];
+  for (const r of state.apiRequests) out.push(`${r.method.padEnd(8)}${String(r.status).padEnd(8)}${(r.user ?? '-').padEnd(12)}${r.path}`);
   return out;
 }
 
@@ -409,9 +538,18 @@ function renderSwitchConfigBody(state: DeviceState): string[] {
   out.push(state.servicePasswordEncryption ? 'service password-encryption' : 'no service password-encryption');
   out.push('!', `hostname ${state.hostname}`, '!', 'boot-start-marker', 'boot-end-marker', '!');
   pushSecurityConfig(state, out);
-  out.push('no aaa new-model', 'system mtu routing 1500', '!');
+  pushHardeningConfig(state, out);
+  out.push('system mtu routing 1500', '!');
   if (state.ipDomainName) out.push(`ip domain-name ${state.ipDomainName}`, '!');
   if (state.sshVersion) out.push(`ip ssh version ${state.sshVersion}`, '!');
+  const snoop = state.dhcpSnooping;
+  if (snoop?.enabled || snoop?.vlans.length || snoop?.optionInsert === false) {
+    if (snoop.vlans.length) out.push(`ip dhcp snooping vlan ${vlanListText(snoop.vlans)}`);
+    if (snoop.optionInsert === false) out.push('no ip dhcp snooping information option');
+    if (snoop.enabled) out.push('ip dhcp snooping');
+    out.push('!');
+  }
+  if (state.arpInspectionVlans.length) out.push(`ip arp inspection vlan ${vlanListText(state.arpInspectionVlans)}`, '!');
   out.push(`spanning-tree mode ${state.stpMode}`, 'spanning-tree extend system-id');
   for (const [v, p] of Object.entries(state.stpPriority).sort((a, b) => Number(a[0]) - Number(b[0]))) out.push(`spanning-tree vlan ${v} priority ${p}`);
   out.push('!', 'vlan internal allocation policy ascending', '!');
@@ -446,12 +584,15 @@ function renderSwitchConfigBody(state: DeviceState): string[] {
       if (i.portfast) out.push(' spanning-tree portfast');
       if (i.bpduGuard) out.push(' spanning-tree bpduguard enable');
       if (i.stpCost !== undefined) out.push(` spanning-tree cost ${i.stpCost}`);
+      if (i.dhcpSnoopingTrust) out.push(' ip dhcp snooping trust');
+      if (i.arpInspectionTrust) out.push(' ip arp inspection trust');
     }
     if (i.shutdown) out.push(' shutdown');
     out.push('!');
   }
   if (state.ipDefaultGateway) out.push(`ip default-gateway ${state.ipDefaultGateway}`);
-  out.push('ip http server', 'ip http secure-server', '!');
+  pushManagementConfig(state, out);
+  pushNtpConfig(state, out);
   pushTail(state, out);
   return out;
 }

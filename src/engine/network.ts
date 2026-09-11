@@ -497,9 +497,17 @@ export function buildNetwork(spec: NetworkSpec): NetworkState {
 // ---------------------------------------------------------------------------
 // layer 2 walk
 
-type Frame = { node: string; iface: string; tag: number | null } | { sw: string; vlan: number };
+/** One switch a frame crossed: the port it came in on, the port it left by, and the VLAN it travelled in. */
+export interface SwitchHop {
+  sw: string;
+  inPort: string;
+  outPort?: string;
+  vlan: number;
+}
 
-type Arrival = { kind: 'host'; node: string } | { kind: 'svi'; node: string; iface: string } | { kind: 'router'; node: string; receivers: InterfaceState[] };
+type Frame = ({ node: string; iface: string; tag: number | null } | { sw: string; vlan: number }) & { path?: SwitchHop[] };
+
+type Arrival = ({ kind: 'host'; node: string } | { kind: 'svi'; node: string; iface: string } | { kind: 'router'; node: string; receivers: InterfaceState[] }) & { path: SwitchHop[] };
 
 function allowsVlan(i: InterfaceState, vlan: number): boolean {
   return i.trunkAllowed === 'all' || i.trunkAllowed.includes(vlan);
@@ -519,19 +527,22 @@ function l2Walk(net: NetworkState, start: Frame): Arrival[] {
   };
   while (queue.length) {
     const f = queue.shift()!;
+    const path = f.path ?? [];
     if ('sw' in f) {
       const key = `${f.sw}:${f.vlan}`;
       if (visited.has(key)) continue;
       visited.add(key);
       const sw = net.devices[f.sw];
       const svi = sw.interfaces[`Vlan${f.vlan}`];
-      if (svi && ifaceUp(net, f.sw, svi.name)) arrivals.push({ kind: 'svi', node: f.sw, iface: svi.name });
+      if (svi && ifaceUp(net, f.sw, svi.name)) arrivals.push({ kind: 'svi', node: f.sw, iface: svi.name, path });
       const blk = blocked(f.sw, f.vlan);
+      const last = path[path.length - 1];
+      const leave = (q: InterfaceState): SwitchHop[] => (last && last.sw === f.sw ? [...path.slice(0, -1), { ...last, outPort: q.name }] : path);
       for (const q of Object.values(sw.interfaces)) {
         if (isSvi(q.name) || isPortChannel(q.name) || !ifaceUp(net, f.sw, q.name) || blk.has(q.name)) continue;
         if (q.mode === 'trunk') {
-          if (allowsVlan(q, f.vlan)) queue.push({ node: f.sw, iface: q.name, tag: f.vlan === q.nativeVlan ? null : f.vlan });
-        } else if (q.accessVlan === f.vlan) queue.push({ node: f.sw, iface: q.name, tag: null });
+          if (allowsVlan(q, f.vlan)) queue.push({ node: f.sw, iface: q.name, tag: f.vlan === q.nativeVlan ? null : f.vlan, path: leave(q) });
+        } else if (q.accessVlan === f.vlan) queue.push({ node: f.sw, iface: q.name, tag: null, path: leave(q) });
       }
       continue;
     }
@@ -541,7 +552,7 @@ function l2Walk(net: NetworkState, start: Frame): Arrival[] {
     if (net.hosts[p.node]) {
       if (f.tag === null && !seen.has(p.node)) {
         seen.add(p.node);
-        arrivals.push({ kind: 'host', node: p.node });
+        arrivals.push({ kind: 'host', node: p.node, path });
       }
       continue;
     }
@@ -554,16 +565,75 @@ function l2Walk(net: NetworkState, start: Frame): Arrival[] {
       const key = `${p.node}:${receivers.map((r) => r.name).join(',')}`;
       if (receivers.length && !seen.has(key)) {
         seen.add(key);
-        arrivals.push({ kind: 'router', node: p.node, receivers });
+        arrivals.push({ kind: 'router', node: p.node, receivers, path });
       }
       continue;
     }
     let vlan: number | null = null;
     if (ifc.mode === 'trunk') vlan = f.tag === null ? ifc.nativeVlan : allowsVlan(ifc, f.tag) ? f.tag : null;
     else if (f.tag === null || f.tag === ifc.accessVlan) vlan = ifc.accessVlan;
-    if (vlan !== null && !blocked(p.node, vlan).has(ifc.name)) queue.push({ sw: p.node, vlan });
+    if (vlan !== null && !blocked(p.node, vlan).has(ifc.name)) queue.push({ sw: p.node, vlan, path: [...path, { sw: p.node, inPort: ifc.name, vlan }] });
   }
   return arrivals;
+}
+
+/** True when a switch inspects DHCP or ARP in this VLAN. */
+function snoopsVlan(sw: DeviceState, vlan: number): boolean {
+  return Boolean(sw.dhcpSnooping?.enabled && sw.dhcpSnooping.vlans.includes(vlan));
+}
+
+/**
+ * The first switch on the path that would drop a DHCP server reply: snooping is on for
+ * the VLAN and the server-facing port is untrusted. Null when the reply gets through.
+ */
+export function dhcpSnoopingDrop(net: NetworkState, path: SwitchHop[]): SwitchHop | null {
+  for (const hop of path) {
+    const sw = net.devices[hop.sw];
+    if (!snoopsVlan(sw, hop.vlan) || !hop.outPort) continue;
+    if (!sw.interfaces[hop.outPort]?.dhcpSnoopingTrust) return hop;
+  }
+  return null;
+}
+
+/** DHCP snooping bindings a switch has learned: leases of hosts cabled to it in a snooped VLAN. */
+export interface SnoopingBinding {
+  mac: string;
+  ip: string;
+  vlan: number;
+  interface: string;
+  hostId: string;
+}
+
+export function dhcpSnoopingBindings(net: NetworkState, swId: string): SnoopingBinding[] {
+  const sw = net.devices[swId];
+  if (!sw?.dhcpSnooping?.enabled) return [];
+  const out: SnoopingBinding[] = [];
+  for (const h of Object.values(net.hosts)) {
+    if (!h.dhcp || !h.dhcpServer || !h.ip) continue;
+    const p = peerOf(net, h.id, HOST_IFACE);
+    if (!p || p.node !== swId) continue;
+    const port = sw.interfaces[p.iface];
+    if (!port || port.mode === 'trunk' || !snoopsVlan(sw, port.accessVlan)) continue;
+    out.push({ mac: h.mac, ip: h.ip, vlan: port.accessVlan, interface: port.name, hostId: h.id });
+  }
+  return out;
+}
+
+/**
+ * Dynamic ARP inspection on the switch port a host is cabled to: in an inspected VLAN an
+ * untrusted port only passes ARP whose sender matches a DHCP snooping binding, so a host
+ * with a static address is silenced until its port is trusted (or an ARP ACL exists).
+ */
+function arpInspectionIngress(net: NetworkState, hostId: string): { ok: boolean; reason?: string } {
+  const h = net.hosts[hostId];
+  const p = peerOf(net, hostId, HOST_IFACE);
+  if (!h || !p) return { ok: true };
+  const sw = net.devices[p.node];
+  const port = sw?.interfaces[p.iface];
+  if (!sw || !port || sw.deviceType !== 'switch' || port.mode === 'trunk') return { ok: true };
+  if (!sw.arpInspectionVlans.includes(port.accessVlan) || port.arpInspectionTrust) return { ok: true };
+  const bound = dhcpSnoopingBindings(net, sw.id).some((b) => b.hostId === hostId && b.ip === h.ip);
+  return bound ? { ok: true } : { ok: false, reason: 'arp inspection dropped the request' };
 }
 
 /** The frame a router interface (physical, subinterface or SVI-less) emits onto its segment. */
@@ -1155,6 +1225,10 @@ export function forward(net: NetworkState, from: string, dstArg: string, spec: P
   if (net.hosts[from]) {
     const ps = portSecurityIngress(net, from, record);
     if (!ps.ok) return { reached: false, hops, reason: ps.reason, hits };
+    if (!v6) {
+      const dai = arpInspectionIngress(net, from);
+      if (!dai.ok) return { reached: false, hops, reason: dai.reason, hits };
+    }
   }
   for (let ttl = 0; ttl < 32; ttl++) {
     if (ownsIp(net, cur, dst)) return { reached: true, hops, srcIp: srcIp ?? dst, srcPort, hits };
@@ -1282,32 +1356,37 @@ function poolFor(server: DeviceState, subnetIp: string, subnetMask: string) {
 export function dhcpRequest(net: NetworkState, hostId: string): DhcpResult {
   const host = net.hosts[hostId];
   if (!host) return { ok: false, reason: 'no such host' };
-  let offer: { server: DeviceState; pool: NonNullable<ReturnType<typeof poolFor>>; serverIp: string } | null = null;
+  type Offer = { server: DeviceState; pool: NonNullable<ReturnType<typeof poolFor>>; serverIp: string };
+  let offer: Offer | null = null;
+  let snooped = false;
   for (const a of l2Walk(net, { node: hostId, iface: HOST_IFACE, tag: null })) {
     if (a.kind !== 'router') continue;
     const dev = net.devices[a.node];
     for (const r of a.receivers) {
       if (!r.ipAddress || !r.subnetMask) continue;
+      let found: Offer | null = null;
       const local = poolFor(dev, r.ipAddress, r.subnetMask);
-      if (local) {
-        offer = { server: dev, pool: local, serverIp: r.ipAddress };
-        break;
-      }
-      if (r.helperAddress) {
+      if (local) found = { server: dev, pool: local, serverIp: r.ipAddress };
+      else if (r.helperAddress) {
         const server = Object.values(net.devices).find((d) => d.deviceType === 'router' && Object.values(d.interfaces).some((i) => i.ipAddress === r.helperAddress && ifaceUp(net, d.id, i.name)));
         if (!server) continue;
         if (!forward(net, dev.id, r.helperAddress, { protocol: 'udp', dstPort: 67, srcPort: 67 }, { record: false }).reached) continue;
         if (!forward(net, server.id, r.ipAddress, { protocol: 'udp', dstPort: 67, srcPort: 67 }, { record: false }).reached) continue;
         const pool = poolFor(server, r.ipAddress, r.subnetMask);
-        if (pool) {
-          offer = { server, pool, serverIp: r.helperAddress };
-          break;
-        }
+        if (pool) found = { server, pool, serverIp: r.helperAddress };
       }
+      if (!found) continue;
+      // The offer comes back along the same switches; DHCP snooping drops it on an untrusted port.
+      if (dhcpSnoopingDrop(net, a.path)) {
+        snooped = true;
+        continue;
+      }
+      offer = found;
+      break;
     }
     if (offer) break;
   }
-  if (!offer) return { ok: false, reason: 'no DHCP server answered' };
+  if (!offer) return { ok: false, reason: snooped ? 'DHCP snooping dropped the offer on an untrusted port' : 'no DHCP server answered' };
   const { server, pool, serverIp } = offer;
   const existing = server.dhcpBindings.find((b) => b.mac === host.mac && b.pool === pool.name);
   let ip = existing?.ip;

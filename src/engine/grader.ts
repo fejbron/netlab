@@ -2,7 +2,7 @@ import { normalizeInterfaceName } from './interfaces';
 import { isIpv6, normalizeIpv6, parsePrefix6 } from './ipv6';
 import { renderConfigBody } from './ios/show';
 import { channelStatus, ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, stpRoot, stpVlan, type ChannelProtocol, type NetworkState, type RouteEntry } from './network';
-import type { AclAddr, AclEntry, AclProtocol, CliErrorKind, DeviceState, LineState, Mode, PortMode } from './types';
+import type { AclAddr, AclEntry, AclProtocol, ApiRequest, CliErrorKind, DeviceState, LineState, Mode, PortMode, SnmpMode, SyslogLevel } from './types';
 
 interface Base {
   /** Device (or host, for ping) the check targets. Defaults to the network's primary device. */
@@ -35,7 +35,7 @@ export type Check = Base &
         encapsulation?: number;
         errDisabled?: boolean;
       }
-    | { type: 'enable-secret'; equals?: string }
+    | { type: 'enable-secret'; equals?: string; minLength?: number }
     | { type: 'enable-password'; equals?: string }
     | { type: 'line'; line: 'con' | 'vty'; password?: string; login?: LineState['login']; transportInput?: LineState['transportInput'] }
     | { type: 'user'; username: string; privilege?: number; secret?: boolean }
@@ -91,6 +91,21 @@ export type Check = Base &
     | { type: 'stp-priority'; vlan: number; priority?: number; max?: number }
     | { type: 'stp-mode'; mode: 'pvst' | 'rapid-pvst' }
     | { type: 'stp-port'; interface: string; vlan?: number; role?: 'Root' | 'Desg' | 'Altn'; state?: 'FWD' | 'BLK'; portfast?: boolean; bpduGuard?: boolean }
+    /** "security passwords min-length" (at least `minLength`) and "login block-for". */
+    | { type: 'password-policy'; minLength?: number; loginBlock?: boolean; maxAttempts?: number }
+    /** exec-timeout configured on a line and no longer than `maxMinutes`. */
+    | { type: 'exec-timeout'; line: 'con' | 'vty'; maxMinutes: number }
+    | { type: 'aaa'; newModel?: boolean; loginLocal?: boolean }
+    | { type: 'dhcp-snooping'; enabled?: boolean; vlans?: number[]; optionInsert?: boolean }
+    /** Trust state of a switch port for DHCP snooping and/or dynamic ARP inspection. */
+    | { type: 'port-trust'; interface: string; dhcpSnooping?: boolean; arpInspection?: boolean }
+    | { type: 'arp-inspection'; vlans: number[] }
+    | { type: 'management-api'; restconf?: boolean; netconf?: boolean; httpsServer?: boolean; httpAuthLocal?: boolean }
+    /** The device answered a RESTCONF request; `path` is a regex over the URI path. */
+    | { type: 'api-request'; method?: ApiRequest['method']; path?: string; status?: number }
+    | { type: 'syslog'; host?: string; trap?: SyslogLevel }
+    | { type: 'snmp-community'; name?: string; mode?: SnmpMode }
+    | { type: 'ntp-server'; address: string }
   );
 
 export interface Objective {
@@ -226,6 +241,28 @@ function describe(check: Check): string {
       return `Spanning-tree mode is ${check.mode}${on}`;
     case 'stp-port':
       return `${check.interface}${check.role ? ` is a ${check.role} port` : ''}${check.state ? ` (${check.state})` : ''}${check.portfast ? ' with PortFast' : ''}${check.bpduGuard ? ' and BPDU guard' : ''}${check.vlan ? ` in VLAN ${check.vlan}` : ''}${on}`;
+    case 'password-policy':
+      return [check.minLength ? `Passwords must be at least ${check.minLength} characters` : '', check.loginBlock ? `Login attacks are blocked${check.maxAttempts ? ` after at most ${check.maxAttempts} failures` : ''}` : ''].filter(Boolean).join('; ') + on;
+    case 'exec-timeout':
+      return `${check.line === 'con' ? 'Console' : 'VTY'} exec-timeout is ${check.maxMinutes} minutes or less${on}`;
+    case 'aaa':
+      return `${check.newModel === false ? 'AAA is off' : 'aaa new-model'}${check.loginLocal ? ' with default login authentication against the local database' : ''}${on}`;
+    case 'dhcp-snooping':
+      return `DHCP snooping${check.enabled === false ? ' off' : ''}${check.vlans ? ` on VLAN ${check.vlans.join(', ')}` : ''}${check.optionInsert === false ? ' without option 82 insertion' : ''}${on}`;
+    case 'port-trust':
+      return `${check.interface} is ${check.dhcpSnooping === false || check.arpInspection === false ? 'untrusted' : 'trusted'} for ${[check.dhcpSnooping !== undefined ? 'DHCP snooping' : '', check.arpInspection !== undefined ? 'ARP inspection' : ''].filter(Boolean).join(' and ')}${on}`;
+    case 'arp-inspection':
+      return `Dynamic ARP inspection on VLAN ${check.vlans.join(', ')}${on}`;
+    case 'management-api':
+      return [check.restconf ? 'RESTCONF' : '', check.netconf ? 'NETCONF' : '', check.httpsServer ? 'HTTPS server' : '', check.httpAuthLocal ? 'local HTTP authentication' : ''].filter(Boolean).join(', ') + ` enabled${on}`;
+    case 'api-request':
+      return `Answered a${check.method ? ` ${check.method}` : 'n API'} request${check.path ? ` for ${check.path.replace(/[\\^$]/g, '')}` : ''}${check.status ? ` with ${check.status}` : ''}${on}`;
+    case 'syslog':
+      return `Syslog${check.host ? ` to ${check.host}` : ''}${check.trap ? ` at level ${check.trap}` : ''}${on}`;
+    case 'snmp-community':
+      return `SNMP community${check.name ? ` ${check.name}` : ''}${check.mode ? ` (${check.mode.toUpperCase()})` : ''}${on}`;
+    case 'ntp-server':
+      return `NTP server ${check.address}${on}`;
   }
 }
 
@@ -319,7 +356,7 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
       return true;
     }
     case 'enable-secret':
-      return state.enableSecret !== undefined && (check.equals === undefined || state.enableSecret === check.equals);
+      return state.enableSecret !== undefined && (check.equals === undefined || state.enableSecret === check.equals) && (check.minLength === undefined || state.enableSecret.length >= check.minLength);
     case 'enable-password':
       return state.enablePassword !== undefined && (check.equals === undefined || state.enablePassword === check.equals);
     case 'line': {
@@ -524,6 +561,59 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
       }
       return true;
     }
+    case 'password-policy': {
+      if (check.minLength !== undefined && !(state.minPasswordLength !== undefined && state.minPasswordLength >= check.minLength)) return false;
+      if (check.loginBlock && !state.loginBlock) return false;
+      if (check.maxAttempts !== undefined && !(state.loginBlock && state.loginBlock.attempts <= check.maxAttempts)) return false;
+      return true;
+    }
+    case 'exec-timeout': {
+      const t = state.lines[check.line].execTimeout;
+      return Boolean(t) && t!.minutes * 60 + t!.seconds <= check.maxMinutes * 60 && t!.minutes * 60 + t!.seconds > 0;
+    }
+    case 'aaa': {
+      if (check.newModel !== undefined && state.aaaNewModel !== check.newModel) return false;
+      if (check.loginLocal && !(state.aaaNewModel && state.aaaLoginDefault?.some((m) => m === 'local' || m === 'local-case'))) return false;
+      return true;
+    }
+    case 'dhcp-snooping': {
+      const s = state.dhcpSnooping;
+      if (check.enabled === false) return !s?.enabled;
+      if (!s?.enabled) return false;
+      if (check.vlans && !check.vlans.every((v) => s.vlans.includes(v))) return false;
+      if (check.optionInsert !== undefined && s.optionInsert !== check.optionInsert) return false;
+      return true;
+    }
+    case 'port-trust': {
+      const name = normalizeInterfaceName(check.interface);
+      const i = name ? state.interfaces[name] : undefined;
+      if (!i) return false;
+      if (check.dhcpSnooping !== undefined && Boolean(i.dhcpSnoopingTrust) !== check.dhcpSnooping) return false;
+      if (check.arpInspection !== undefined && Boolean(i.arpInspectionTrust) !== check.arpInspection) return false;
+      return true;
+    }
+    case 'arp-inspection':
+      return check.vlans.every((v) => state.arpInspectionVlans.includes(v));
+    case 'management-api': {
+      if (check.restconf !== undefined && state.restconf !== check.restconf) return false;
+      if (check.netconf !== undefined && state.netconfYang !== check.netconf) return false;
+      if (check.httpsServer !== undefined && state.httpSecureServer !== check.httpsServer) return false;
+      if (check.httpAuthLocal !== undefined && state.httpAuthLocal !== check.httpAuthLocal) return false;
+      return true;
+    }
+    case 'api-request': {
+      const re = check.path ? new RegExp(check.path, 'i') : null;
+      return state.apiRequests.some((r) => (check.method === undefined || r.method === check.method) && (re === null || re.test(r.path)) && (check.status === undefined || r.status === check.status));
+    }
+    case 'syslog': {
+      if (check.host !== undefined && !state.loggingHosts.includes(check.host)) return false;
+      if (check.trap !== undefined && state.loggingTrap !== check.trap) return false;
+      return check.host !== undefined || check.trap !== undefined || state.loggingHosts.length > 0;
+    }
+    case 'snmp-community':
+      return state.snmpCommunities.some((c) => (check.name === undefined || c.name === check.name) && (check.mode === undefined || c.mode === check.mode));
+    case 'ntp-server':
+      return state.ntpServers.includes(check.address);
   }
 }
 

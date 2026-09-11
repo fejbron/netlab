@@ -12,6 +12,8 @@ import { learnAclLabs } from './labs/learn-acls';
 import { learnDhcpLabs } from './labs/learn-dhcp';
 import { learnNatLabs } from './labs/learn-nat';
 import { learnIpv6Labs } from './labs/learn-ipv6';
+import { learnSecurityLabs } from './labs/learn-security';
+import { learnAutomationLabs } from './labs/learn-automation';
 import { ccnaExamLabs } from './labs/ccna-exams';
 
 export type { Lab, Module, Difficulty } from './types';
@@ -31,8 +33,22 @@ export const modules: Module[] = [
   { id: 'learn-nat', order: 10, title: 'Learn NAT', description: 'Publish a server with static NAT and share one public address with PAT.', examTopics: ['4.1'] },
   { id: 'learn-ipv6', order: 11, title: 'Learn IPv6', description: 'Address interfaces with global and link-local IPv6, then route between IPv6 networks.', examTopics: ['1.8', '1.9', '3.3'] },
   {
-    id: 'ccna-exams',
+    id: 'learn-security',
     order: 12,
+    title: 'Learn Network Security',
+    description: 'Enforce password policy and AAA, protect the management plane, and defend the access layer with DHCP snooping and dynamic ARP inspection.',
+    examTopics: ['5.3', '5.4', '5.7', '5.8'],
+  },
+  {
+    id: 'learn-automation',
+    order: 13,
+    title: 'Learn Automation & AI Network Operations',
+    description: 'Enable RESTCONF and NETCONF, read and change a router as JSON, feed telemetry to an AI operations platform, and verify an AI-proposed change before trusting it.',
+    examTopics: ['4.2', '4.4', '4.5', '6.4', '6.5', '6.7'],
+  },
+  {
+    id: 'ccna-exams',
+    order: 14,
     title: 'CCNA Exams',
     description: 'Multi-device capstone exams that combine switching, routing, OSPF, ACLs, DHCP, NAT, IPv6, troubleshooting and hardening.',
     examTopics: ['2.1', '2.2', '3.3', '3.4', '4.6', '4.8', '5.3', '5.6'],
@@ -44,7 +60,7 @@ export function totalMinutes(items: Lab[] = labs): number {
   return items.reduce((n, l) => n + l.estimatedMinutes, 0);
 }
 
-export const labs: Lab[] = [...meetTheCliLabs, ...learnSwitchingLabs, ...learnEtherchannelLabs, ...learnStpLabs, ...secureTheSwitchLabs, ...learnRoutingLabs, ...learnOspfLabs, ...multiAreaOspfLabs, ...learnAclLabs, ...learnDhcpLabs, ...learnNatLabs, ...learnIpv6Labs, ...ccnaExamLabs].sort((a, b) => {
+export const labs: Lab[] = [...meetTheCliLabs, ...learnSwitchingLabs, ...learnEtherchannelLabs, ...learnStpLabs, ...secureTheSwitchLabs, ...learnRoutingLabs, ...learnOspfLabs, ...multiAreaOspfLabs, ...learnAclLabs, ...learnDhcpLabs, ...learnNatLabs, ...learnIpv6Labs, ...learnSecurityLabs, ...learnAutomationLabs, ...ccnaExamLabs].sort((a, b) => {
   const ma = modules.find((m) => m.id === a.moduleId)?.order ?? 0;
   const mb = modules.find((m) => m.id === b.moduleId)?.order ?? 0;
   return ma - mb || a.order - b.order;
