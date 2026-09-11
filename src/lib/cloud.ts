@@ -1,4 +1,6 @@
+import { getLab } from '../content';
 import { supabase } from './supabase';
+import { labPoints } from './points';
 import type { LabProgress, ProgressMap } from './progress';
 
 /** Row shape of the public.lab_progress table (see supabase/schema.sql). */
@@ -9,8 +11,13 @@ interface ProgressRow {
   completed_at: string;
 }
 
+/**
+ * Points are derived from the lab and the stars, but they are stored with the row:
+ * the leaderboard totals them in SQL, where the lab catalogue is not available.
+ */
 function toRow(userId: string, labId: string, p: LabProgress) {
-  return { user_id: userId, lab_id: labId, score: p.score, stars: p.stars, completed_at: p.completedAt };
+  const lab = getLab(labId);
+  return { user_id: userId, lab_id: labId, score: p.score, stars: p.stars, points: lab ? labPoints(lab, p.stars) : 0, completed_at: p.completedAt };
 }
 
 /** Every lab the signed-in learner has passed, as stored on the server. */

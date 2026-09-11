@@ -6,6 +6,7 @@ import Icon, { NF } from '../components/Icon';
 import { domainCoverage, getPath, labsForModule, labsForPath, modulesForPath, paths, pathUrl, totalMinutes, type Lab, type LearningPath, type Module } from '../content';
 import { useAuth } from '../lib/auth';
 import { STAR_LEVELS, labState, nextAction, type LabState } from '../lib/pathProgress';
+import { formatPoints, maxTotalPoints, totalPoints } from '../lib/points';
 import { useProgress } from '../lib/progressStore';
 import { loadSession } from '../lib/session';
 
@@ -103,6 +104,7 @@ export default function DashboardPage({ path = paths[0] }: { path?: LearningPath
   const completed = pathLabs.filter((l) => progress[l.id]).length;
   const inProgress = pathLabs.filter((l) => states[l.id].status === 'in-progress').length;
   const stars = pathLabs.reduce((n, l) => n + (progress[l.id]?.stars ?? 0), 0);
+  const points = totalPoints(pathLabs, progress);
   const pathPercent = pathLabs.length ? Math.round((completed / pathLabs.length) * 100) : 0;
   const started = completed > 0 || inProgress > 0;
   const complete = pathLabs.length > 0 && completed === pathLabs.length;
@@ -226,8 +228,8 @@ export default function DashboardPage({ path = paths[0] }: { path?: LearningPath
           </div>
           <div className="grid shrink-0 grid-cols-[repeat(3,minmax(0,1fr))] gap-2 md:grid-cols-1 lg:grid-cols-[repeat(3,minmax(0,1fr))]">
             <Stat value={`${completed}/${pathLabs.length}`} label="labs passed" glyph={NF.flag} />
+            <Stat value={formatPoints(points)} label="points" glyph={NF.trophy} />
             <Stat value={String(stars)} label="stars" glyph={NF.star} />
-            <Stat value={String(inProgress)} label="in progress" glyph={NF.play} />
           </div>
         </section>
 
@@ -402,7 +404,7 @@ export default function DashboardPage({ path = paths[0] }: { path?: LearningPath
                   <dd className="mt-1 leading-6 text-fg">{path.prerequisites}</dd>
                 </div>
                 <div>
-                  <dt className="label text-muted">How stars work</dt>
+                  <dt className="label text-muted">How stars and points work</dt>
                   <dd className="mt-1.5 space-y-1">
                     {STAR_LEVELS.filter((l) => l.stars > 0).map((l) => (
                       <div key={l.stars} className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-1.5">
@@ -415,6 +417,9 @@ export default function DashboardPage({ path = paths[0] }: { path?: LearningPath
                         <span className="text-xs text-muted">{l.description}</span>
                       </div>
                     ))}
+                    <p className="pt-1 text-xs leading-5 text-muted">
+                      Points follow from the stars: a lab is worth 100 at Beginner, 200 at Intermediate and 300 at Advanced, an exam counts double, and you keep the full value at three stars, 70% at two and 40% at one. This path is worth {formatPoints(maxTotalPoints(pathLabs))} points.
+                    </p>
                   </dd>
                 </div>
               </dl>

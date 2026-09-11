@@ -4,6 +4,7 @@ import Header from '../components/Header';
 import AccountMenu from '../components/AccountMenu';
 import Icon, { NF } from '../components/Icon';
 import { labs } from '../content';
+import { formatPoints, maxTotalPoints, totalPoints } from '../lib/points';
 import { useAuth } from '../lib/auth';
 import { fetchProfile, updateProfile, type Profile } from '../lib/leaderboard';
 import { useProgress } from '../lib/progressStore';
@@ -132,6 +133,7 @@ export default function AccountPage() {
 
   const passed = labs.filter((l) => progress[l.id]).length;
   const stars = labs.reduce((n, l) => n + (progress[l.id]?.stars ?? 0), 0);
+  const points = totalPoints(labs, progress);
 
   return (
     <div className="flex h-full flex-col">
@@ -168,11 +170,15 @@ export default function AccountPage() {
                 </dd>
               </div>
               <div className="rounded-xl bg-surface-2 p-3">
-                <dt className="label text-muted">Stars</dt>
-                <dd className="mt-1 font-mono text-2xl font-bold text-star">
-                  <Icon g={NF.star} className="mr-1 text-lg" />
-                  {stars}
-                  <span className="text-sm font-normal text-muted"> / {labs.length * 3}</span>
+                <dt className="label text-muted">Points</dt>
+                <dd className="mt-1 font-mono text-2xl font-bold text-fg-bright">
+                  <Icon g={NF.trophy} className="mr-1 text-lg text-star" />
+                  {formatPoints(points)}
+                  <span className="text-sm font-normal text-muted"> / {formatPoints(maxTotalPoints(labs))}</span>
+                </dd>
+                <dd className="label mt-1 text-muted">
+                  <Icon g={NF.star} className="mr-1 text-star" />
+                  {stars} of {labs.length * 3} stars
                 </dd>
               </div>
             </dl>

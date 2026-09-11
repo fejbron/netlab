@@ -35,7 +35,7 @@ Open-source network CLI labs that run entirely in your browser. Practise Cisco I
 - **PC terminal**: `ipconfig` (with `/all`, `/renew`, `/release`), `ping` and `tracert` (IPv4 and IPv6) with Windows-style output, and `curl` (`-k`, `-u`, `-X`, `-H`, `-d`, `-i`) against a router's RESTCONF API with realistic failures (connection refused, self-signed certificate, 401, 404, 400 for malformed JSON, 204 on a successful write), so learners test from the host like they would on the job.
 - **Labs with live grading**: objectives are declarative checks on device state, command history and ping results, scoped to any device in the topology. The sidebar ticks off objectives as you type.
 - **Accounts**: when the site operator enables accounts (see below), learners must sign in, with email and password or GitHub, before starting a lab. Their best score and stars per lab are stored server-side and follow them across devices; the lab list and leaderboard stay visible to visitors. A copy deployed without a Supabase project runs in guest mode instead: no sign-in, progress in `localStorage`, nothing leaves the browser.
-- **Leaderboard**: with accounts enabled, `/leaderboard` ranks learners by total stars (then labs passed, then who got there first). Each learner has a public display name, defaulting to their GitHub user name or the part of their email before the @, editable on the account page, and can opt out of the board. Emails are never shown.
+- **Leaderboard**: with accounts enabled, `/leaderboard` ranks learners by points (then labs passed, then who got there first). A lab is worth 100 points at Beginner, 200 at Intermediate and 300 at Advanced, an exam counts double, and the stars decide how much of that value is kept: all of it for a pass without hints, 70% with some, 40% after using them all (`src/lib/points.ts`). Points are stored with each passed lab so the leaderboard view can total them in SQL. Each learner has a public display name, defaulting to their GitHub user name or the part of their email before the @, editable on the account page, and can opt out of the board. Emails are never shown.
 
 ## Quick start
 
@@ -64,7 +64,7 @@ NetLab works without any backend. To let learners create accounts and keep progr
    npx supabase@2 db query --linked --project-ref <your-project-ref> -f supabase/schema.sql
    ```
 
-   It creates the `lab_progress` table with row-level security, so each learner can only read and write their own rows, plus a `profiles` table (public display name, leaderboard opt-out, filled in automatically when an account is created) and the `leaderboard` view, which totals stars across learners without exposing anyone's individual rows. The file is safe to re-run after upgrades.
+   It creates the `lab_progress` table (with a `points` column) and its row-level security, so each learner can only read and write their own rows, plus a `profiles` table (public display name, leaderboard opt-out, filled in automatically when an account is created) and the `leaderboard` view, which totals points across learners without exposing anyone's individual rows. The file is safe to re-run after upgrades.
 2. In Authentication > Providers, keep Email enabled. Optionally enable GitHub and add your site URL under Authentication > URL Configuration (add `http://localhost:5173` for local development, and `/account` as an allowed redirect path).
 3. Copy the project URL and the anon (public) key from Project Settings > API into a `.env.local` file (see `.env.example`):
 

@@ -3,13 +3,15 @@ import { supabase } from './supabase';
 export interface LeaderboardEntry {
   userId: string;
   displayName: string;
+  /** What the learner's passes are worth; see lib/points.ts. */
+  totalPoints: number;
   totalStars: number;
   labsPassed: number;
   lastCompleted: string | null;
 }
 
 export interface RankedEntry extends LeaderboardEntry {
-  /** 1-based rank; learners with equal stars and labs share a rank. */
+  /** 1-based rank; learners with equal points and labs share a rank. */
   rank: number;
 }
 
@@ -24,28 +26,28 @@ export function rankEntries(entries: LeaderboardEntry[]): RankedEntry[] {
   const out: RankedEntry[] = [];
   for (let i = 0; i < entries.length; i++) {
     const prev = out[i - 1];
-    const tie = prev && prev.totalStars === entries[i].totalStars && prev.labsPassed === entries[i].labsPassed;
+    const tie = prev && prev.totalPoints === entries[i].totalPoints && prev.labsPassed === entries[i].labsPassed;
     out.push({ ...entries[i], rank: tie ? prev.rank : i + 1 });
   }
   return out;
 }
 
-/** Sort the way the server view does: stars, then labs passed, then who got there first. Pure. */
+/** Sort the way the server view does: points, then labs passed, then who got there first. Pure. */
 export function sortEntries(entries: LeaderboardEntry[]): LeaderboardEntry[] {
-  return [...entries].sort((a, b) => b.totalStars - a.totalStars || b.labsPassed - a.labsPassed || (a.lastCompleted ?? '').localeCompare(b.lastCompleted ?? ''));
+  return [...entries].sort((a, b) => b.totalPoints - a.totalPoints || b.labsPassed - a.labsPassed || (a.lastCompleted ?? '').localeCompare(b.lastCompleted ?? ''));
 }
 
 export async function fetchLeaderboard(limit = 50): Promise<LeaderboardEntry[]> {
   if (!supabase) return [];
   const { data, error } = await supabase
     .from('leaderboard')
-    .select('user_id, display_name, total_stars, labs_passed, last_completed')
-    .order('total_stars', { ascending: false })
+    .select('user_id, display_name, total_points, total_stars, labs_passed, last_completed')
+    .order('total_points', { ascending: false })
     .order('labs_passed', { ascending: false })
     .order('last_completed', { ascending: true })
     .limit(limit);
   if (error) throw new Error(error.message);
-  return (data ?? []).map((r) => ({ userId: r.user_id as string, displayName: r.display_name as string, totalStars: r.total_stars as number, labsPassed: r.labs_passed as number, lastCompleted: (r.last_completed as string | null) ?? null }));
+  return (data ?? []).map((r) => ({ userId: r.user_id as string, displayName: r.display_name as string, totalPoints: (r.total_points as number) ?? 0, totalStars: r.total_stars as number, labsPassed: r.labs_passed as number, lastCompleted: (r.last_completed as string | null) ?? null }));
 }
 
 export async function fetchProfile(userId: string): Promise<Profile | null> {

@@ -6,8 +6,9 @@ import Icon, { NF } from '../components/Icon';
 import { labs } from '../content';
 import { useAuth } from '../lib/auth';
 import { fetchLeaderboard, rankEntries, type RankedEntry } from '../lib/leaderboard';
+import { DIFFICULTY_POINTS, EXAM_MULTIPLIER, formatPoints, maxTotalPoints } from '../lib/points';
 
-const MAX_STARS = labs.length * 3;
+const MAX_POINTS = maxTotalPoints(labs);
 
 function Rank({ n }: { n: number }) {
   if (n === 1) return <Icon g={NF.trophy} className="text-star" label="1st" />;
@@ -51,7 +52,7 @@ export default function LeaderboardPage() {
         </p>
         <h1 className="display mt-2 text-4xl text-fg-bright">Leaderboard</h1>
         <p className="mt-2 text-sm leading-6 text-muted">
-          Ranked by stars. Each lab is worth up to three: three for passing without hints, two with some hints, one after using them all. {labs.length} labs, {MAX_STARS} stars in total.
+          Ranked by points. A lab is worth {DIFFICULTY_POINTS.Beginner} points at Beginner, {DIFFICULTY_POINTS.Intermediate} at Intermediate and {DIFFICULTY_POINTS.Advanced} at Advanced, and an exam counts {EXAM_MULTIPLIER === 2 ? 'double' : `${EXAM_MULTIPLIER} times`}. You keep the full value for a pass without hints, 70% with some hints and 40% after using them all. {labs.length} labs, {formatPoints(MAX_POINTS)} points in total.
         </p>
 
         {!auth.enabled ? (
@@ -82,7 +83,8 @@ export default function LeaderboardPage() {
                   <tr className="border-b border-border">
                     <th className="px-4 py-2.5 font-normal">#</th>
                     <th className="px-4 py-2.5 font-normal">Learner</th>
-                    <th className="px-4 py-2.5 text-right font-normal">Stars</th>
+                    <th className="px-4 py-2.5 text-right font-normal">Points</th>
+                    <th className="hidden px-4 py-2.5 text-right font-normal sm:table-cell">Stars</th>
                     <th className="px-4 py-2.5 text-right font-normal">Labs</th>
                     <th className="hidden px-4 py-2.5 text-right font-normal sm:table-cell">Last pass</th>
                   </tr>
@@ -99,7 +101,8 @@ export default function LeaderboardPage() {
                           {e.displayName}
                           {isMe && <span className="pill ml-2 border-accent/40 text-accent">you</span>}
                         </td>
-                        <td className="px-4 py-2.5 text-right font-mono text-star">
+                        <td className="px-4 py-2.5 text-right font-mono font-bold text-fg-bright">{formatPoints(e.totalPoints)}</td>
+                        <td className="hidden px-4 py-2.5 text-right font-mono text-star sm:table-cell">
                           <Icon g={NF.star} className="mr-1 text-[11px]" />
                           {e.totalStars}
                         </td>

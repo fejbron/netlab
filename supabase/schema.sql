@@ -7,10 +7,19 @@ create table if not exists public.lab_progress (
   lab_id       text        not null,
   score        integer     not null check (score between 0 and 100),
   stars        integer     not null check (stars between 0 and 3),
+  -- What the pass is worth on the leaderboard: difficulty and exam weight times the
+  -- share the stars earned. The client computes it (see src/lib/points.ts) because
+  -- the lab catalogue lives in the app, not in the database.
+  points       integer     not null default 0 check (points >= 0),
   completed_at timestamptz not null,
   updated_at   timestamptz not null default now(),
   primary key (user_id, lab_id)
 );
+
+-- Existing installations: add the column, then give rows written before points
+-- existed an approximate value. The real value is written on the learner's next sync.
+alter table public.lab_progress add column if not exists points integer not null default 0;
+update public.lab_progress set points = stars * 100 where points = 0;
 
 create index if not exists lab_progress_user_idx on public.lab_progress (user_id);
 
@@ -47,9 +56,14 @@ create policy "own progress: delete" on public.lab_progress
   for delete using (auth.uid() = user_id);
 
 -- Optional: a per-learner summary the dashboard could use later.
-create or replace view public.my_progress_summary
+drop view if exists public.my_progress_summary;
+create view public.my_progress_summary
   with (security_invoker = true) as
-  select user_id, count(*) as labs_passed, sum(stars) as total_stars, max(completed_at) as last_completed
+  select user_id,
+         count(*) as labs_passed,
+         sum(points)::int as total_points,
+         sum(stars)::int as total_stars,
+         max(completed_at) as last_completed
   from public.lab_progress
   group by user_id;
 
@@ -132,12 +146,14 @@ from auth.users u
 where not exists (select 1 from public.profiles p where p.id = u.id);
 
 -- The leaderboard. This view is owned by the schema owner and deliberately does
--- NOT use security_invoker, so it can total stars across every learner while the
+-- NOT use security_invoker, so it can total points across every learner while the
 -- lab_progress rows themselves stay private. It only exposes display names and
 -- totals, and skips learners who opted out.
-create or replace view public.leaderboard as
+drop view if exists public.leaderboard;
+create view public.leaderboard as
   select p.id as user_id,
          p.display_name,
+         coalesce(sum(l.points), 0)::int as total_points,
          coalesce(sum(l.stars), 0)::int as total_stars,
          count(l.lab_id)::int as labs_passed,
          max(l.completed_at) as last_completed
@@ -146,6 +162,6 @@ create or replace view public.leaderboard as
   where p.show_on_leaderboard
   group by p.id, p.display_name
   having count(l.lab_id) > 0
-  order by total_stars desc, labs_passed desc, last_completed asc;
+  order by total_points desc, labs_passed desc, last_completed asc;
 
 grant select on public.leaderboard to anon, authenticated;
