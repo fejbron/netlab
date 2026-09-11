@@ -19,7 +19,7 @@ export default function ResultsModal({ result, stars, labTitle, commandCount, ne
       <div className="card w-full max-w-md p-7 shadow-2xl shadow-black/50">
         <div className="mb-3 flex justify-center gap-2 text-3xl" aria-label={`${stars} of 3 stars`}>
           {[1, 2, 3].map((n) => (
-            <Icon key={n} g={n <= stars ? NF.star : NF.starO} className={n <= stars ? 'text-star drop-shadow-[0_0_12px_rgba(249,226,175,0.45)]' : 'text-surface-3'} />
+            <Icon key={n} g={n <= stars ? NF.star : NF.starO} className={n <= stars ? 'text-star drop-shadow-[0_0_12px_rgba(255,255,255,0.45)]' : 'text-surface-3'} />
           ))}
         </div>
         <p className={`label text-center ${result.passed ? 'text-success' : 'text-warning'}`}>

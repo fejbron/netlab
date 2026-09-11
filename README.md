@@ -79,7 +79,7 @@ The app is a static site, so the free tier is enough. Import the repository in V
 
 ## Design
 
-Dark theme built on the Catppuccin Mocha palette with a mauve accent (tokens in `src/index.css`). Headings, labels, the terminal and all icons use a self-hosted [JetBrainsMono Nerd Font](https://www.nerdfonts.com/) (`public/fonts/`, WOFF2); prose uses Inter. Icons are Nerd Font glyphs rendered through `src/components/Icon.tsx`, so no icon library is needed.
+Monochrome theme: a pure black canvas, white accent and greys in between (tokens in `src/index.css`). Success, warning and danger are shades of white, so meaning always comes with an icon or a label, never from hue alone. Headings, labels, the terminal and all icons use a self-hosted [JetBrainsMono Nerd Font](https://www.nerdfonts.com/) (`public/fonts/`, WOFF2); prose uses Inter. Icons are Nerd Font glyphs rendered through `src/components/Icon.tsx`, so no icon library is needed.
 
 ## Project layout
 
