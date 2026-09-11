@@ -11,9 +11,22 @@ export interface LeaderboardEntry {
 }
 
 export interface RankedEntry extends LeaderboardEntry {
-  /** 1-based rank; learners with equal points and labs share a rank. */
+  /** 1-based rank; learners with equal totals and labs share a rank. */
   rank: number;
 }
+
+/**
+ * How the board is ordered. A database that predates the points column still totals
+ * stars, so the page falls back to those rather than failing.
+ */
+export type RankedBy = 'points' | 'stars';
+
+export interface LeaderboardResult {
+  entries: LeaderboardEntry[];
+  rankedBy: RankedBy;
+}
+
+const total = (e: LeaderboardEntry, by: RankedBy) => (by === 'points' ? e.totalPoints : e.totalStars);
 
 export interface Profile {
   id: string;
@@ -22,32 +35,58 @@ export interface Profile {
 }
 
 /** Assign competition ranks ("1, 2, 2, 4") to entries already sorted by the server. Pure. */
-export function rankEntries(entries: LeaderboardEntry[]): RankedEntry[] {
+export function rankEntries(entries: LeaderboardEntry[], rankedBy: RankedBy = 'points'): RankedEntry[] {
   const out: RankedEntry[] = [];
   for (let i = 0; i < entries.length; i++) {
     const prev = out[i - 1];
-    const tie = prev && prev.totalPoints === entries[i].totalPoints && prev.labsPassed === entries[i].labsPassed;
+    const tie = prev && total(prev, rankedBy) === total(entries[i], rankedBy) && prev.labsPassed === entries[i].labsPassed;
     out.push({ ...entries[i], rank: tie ? prev.rank : i + 1 });
   }
   return out;
 }
 
-/** Sort the way the server view does: points, then labs passed, then who got there first. Pure. */
-export function sortEntries(entries: LeaderboardEntry[]): LeaderboardEntry[] {
-  return [...entries].sort((a, b) => b.totalPoints - a.totalPoints || b.labsPassed - a.labsPassed || (a.lastCompleted ?? '').localeCompare(b.lastCompleted ?? ''));
+/** Sort the way the server view does: the ranking total, then labs passed, then who got there first. Pure. */
+export function sortEntries(entries: LeaderboardEntry[], rankedBy: RankedBy = 'points'): LeaderboardEntry[] {
+  return [...entries].sort((a, b) => total(b, rankedBy) - total(a, rankedBy) || b.labsPassed - a.labsPassed || (a.lastCompleted ?? '').localeCompare(b.lastCompleted ?? ''));
 }
 
-export async function fetchLeaderboard(limit = 50): Promise<LeaderboardEntry[]> {
-  if (!supabase) return [];
-  const { data, error } = await supabase
-    .from('leaderboard')
-    .select('user_id, display_name, total_points, total_stars, labs_passed, last_completed')
-    .order('total_points', { ascending: false })
-    .order('labs_passed', { ascending: false })
-    .order('last_completed', { ascending: true })
-    .limit(limit);
-  if (error) throw new Error(error.message);
-  return (data ?? []).map((r) => ({ userId: r.user_id as string, displayName: r.display_name as string, totalPoints: (r.total_points as number) ?? 0, totalStars: r.total_stars as number, labsPassed: r.labs_passed as number, lastCompleted: (r.last_completed as string | null) ?? null }));
+interface Row {
+  user_id: string;
+  display_name: string;
+  total_points?: number;
+  total_stars: number;
+  labs_passed: number;
+  last_completed: string | null;
+}
+
+function toEntry(r: Row): LeaderboardEntry {
+  return { userId: r.user_id, displayName: r.display_name, totalPoints: r.total_points ?? 0, totalStars: r.total_stars, labsPassed: r.labs_passed, lastCompleted: r.last_completed ?? null };
+}
+
+/** The database has not had supabase/schema.sql re-applied since points were added. */
+function missingPointsColumn(error: { code?: string; message?: string }): boolean {
+  return error.code === '42703' || /total_points/.test(error.message ?? '');
+}
+
+export async function fetchLeaderboard(limit = 50): Promise<LeaderboardResult> {
+  if (!supabase) return { entries: [], rankedBy: 'points' };
+  const query = (columns: string, order: string) =>
+    supabase!
+      .from('leaderboard')
+      .select(columns)
+      .order(order, { ascending: false })
+      .order('labs_passed', { ascending: false })
+      .order('last_completed', { ascending: true })
+      .limit(limit);
+
+  const { data, error } = await query('user_id, display_name, total_points, total_stars, labs_passed, last_completed', 'total_points');
+  if (!error) return { entries: (data as unknown as Row[]).map(toEntry), rankedBy: 'points' };
+  if (!missingPointsColumn(error)) throw new Error(error.message);
+
+  // Older database: rank by stars so the board still works until the schema is re-applied.
+  const legacy = await query('user_id, display_name, total_stars, labs_passed, last_completed', 'total_stars');
+  if (legacy.error) throw new Error(legacy.error.message);
+  return { entries: (legacy.data as unknown as Row[]).map(toEntry), rankedBy: 'stars' };
 }
 
 export async function fetchProfile(userId: string): Promise<Profile | null> {

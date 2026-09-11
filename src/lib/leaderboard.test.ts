@@ -14,6 +14,16 @@ describe('leaderboard ranking', () => {
     expect(sorted.map((x) => x.displayName)).toEqual(['few-hard', 'many-easy']);
   });
 
+  it('falls back to stars when the database cannot report points', () => {
+    // A database that predates the points column reports zero for every learner.
+    const rows = [e('few-hard', 0, 2), e('many-easy', 0, 6)].map((x) => ({ ...x, totalStars: x.labsPassed * 3 }));
+    const sorted = sortEntries(rows, 'stars');
+    expect(sorted.map((x) => x.displayName)).toEqual(['many-easy', 'few-hard']);
+    expect(rankEntries(sorted, 'stars').map((x) => x.rank)).toEqual([1, 2]);
+    // Ranking those same rows by points would tie everyone on zero.
+    expect(rankEntries(rows, 'points').map((x) => x.rank)).toEqual([1, 2]);
+  });
+
   it('gives tied learners the same rank and skips the next number', () => {
     const ranked = rankEntries([e('a', 1200, 4), e('b', 900, 3), e('c', 900, 3), e('d', 900, 2), e('f', 0, 0)]);
     expect(ranked.map((x) => x.rank)).toEqual([1, 2, 2, 4, 5]);
