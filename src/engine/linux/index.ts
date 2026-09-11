@@ -13,6 +13,7 @@ export type { PendingPython, CmdResult } from './shell';
 export { Shell, runLine, globToRegex } from './shell';
 export { COMMANDS as LINUX_COMMANDS, LINUX_COMMAND_NAMES } from './commands';
 export { serveHttp, testNginx, loadNginx, makeCertificate, makePrivateKey, parseCertificate, resolveName } from './web';
+export { APACHE_MODULES, enabledModules, enabledSites, installApacheFiles, loadApache, testApache } from './apache';
 export type { HttpRequest, HttpResponse, WebRequestRecord } from './web';
 
 export interface LinuxExecResult {

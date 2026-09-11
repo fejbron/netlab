@@ -20,6 +20,7 @@ import { linuxAdminLabs } from './labs/linux-admin';
 import { linuxScriptingLabs } from './labs/linux-scripting';
 import { linuxPythonLabs } from './labs/linux-python';
 import { linuxWebLabs } from './labs/linux-web';
+import { linuxApacheLabs } from './labs/linux-apache';
 import { paths } from './paths';
 
 export type { Lab, Module, Difficulty } from './types';
@@ -70,7 +71,15 @@ export const modules: Module[] = [
   { id: 'linux-admin', pathId: 'linux', order: 2, title: 'Administer the Server', description: 'Become root safely, manage users and groups, install and run services, read processes and logs, and check the network from the host.', examTopics: ['UG.1', 'UG.2', 'OD.1', 'OD.2', 'OD.3', 'NW.1', 'NW.2', 'NW.3', 'NW.4'] },
   { id: 'linux-scripting', pathId: 'linux', order: 3, title: 'Shell Scripting', description: 'Automate with Bash: variables, scripts, conditions, loops, functions, exit codes and text-processing pipelines.', examTopics: ['OD.4', 'EC.5', 'EC.6', 'EC.7'] },
   { id: 'linux-web', pathId: 'linux', order: 4, title: 'Web Servers, TLS and Load Balancing', description: 'Configure nginx: virtual hosts, self-signed TLS with HTTP-to-HTTPS redirects, a reverse proxy, and an upstream that balances two application servers and survives a backend failure.', examTopics: ['NW.3', 'NW.5', 'NW.6', 'NW.7', 'OD.1'] },
-  { id: 'linux-python', pathId: 'linux', order: 5, title: 'Python on Linux', description: 'Run real Python in your browser: read files and JSON, generate device configuration, and audit the system.', examTopics: ['OD.5', 'NW.4'] },
+  {
+    id: 'linux-apache',
+    pathId: 'linux',
+    order: 5,
+    title: 'Apache HTTP Server',
+    description: 'Run the other web server: the Debian apache2 layout, virtual hosts with a2ensite, modules with a2enmod, TLS, redirects, reverse proxying, mod_proxy_balancer, and the port conflict when two servers want 80.',
+    examTopics: ['NW.3', 'NW.5', 'NW.6', 'NW.7', 'NW.8', 'OD.1', 'OD.2'],
+  },
+  { id: 'linux-python', pathId: 'linux', order: 6, title: 'Python on Linux', description: 'Run real Python in your browser: read files and JSON, generate device configuration, and audit the system.', examTopics: ['OD.5', 'NW.4'] },
 ];
 
 const pathOrder = (pathId: string) => paths.findIndex((p) => p.id === pathId);
@@ -95,6 +104,7 @@ export const labs: Lab[] = [
   ...linuxAdminLabs,
   ...linuxScriptingLabs,
   ...linuxWebLabs,
+  ...linuxApacheLabs,
   ...linuxPythonLabs,
 ].sort((a, b) => {
   const ma = modules.find((m) => m.id === a.moduleId);

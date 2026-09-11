@@ -5,7 +5,8 @@
  * self-signed certificates for openssl.
  */
 import { forward, type NetworkState } from '../network';
-import { baseName, getNode, listDir, normalizePath, parentPath, readFile, resolveLink, type LinuxState } from './fs';
+import { baseName, getNode, listDir, normalizePath, parentPath, readFile, resolveLink, type LinuxState, type ServerRuntime } from './fs';
+import { apacheModelFromSnapshot, loadApache, proxyHandlerMissing } from './apache';
 
 export interface WebRequestRecord {
   scheme: 'http' | 'https';
@@ -193,13 +194,13 @@ interface Listen {
   defaultServer: boolean;
 }
 
-interface Location {
+export interface Location {
   modifier: '' | '=' | '~' | '^~';
   path: string;
   directives: Directive[];
 }
 
-interface ServerBlock {
+export interface ServerBlock {
   listens: Listen[];
   names: string[];
   root?: string;
@@ -213,7 +214,7 @@ interface ServerBlock {
   line: number;
 }
 
-interface UpstreamServer {
+export interface UpstreamServer {
   host: string;
   port: number;
   weight: number;
@@ -221,7 +222,7 @@ interface UpstreamServer {
   down: boolean;
 }
 
-interface Upstream {
+export interface Upstream {
   name: string;
   servers: UpstreamServer[];
   method: 'round_robin' | 'least_conn' | 'ip_hash';
@@ -339,12 +340,8 @@ function buildModel(state: LinuxState, conf: Directive[]): { model: NginxModel; 
       if (!cert) errors.push(`no "ssl_certificate" is defined for the "listen ... ssl" directive in ${where}`);
       else if (!key) errors.push(`no "ssl_certificate_key" is defined for certificate "${cert}"`);
       else {
-        const certNode = getNode(state, cert);
-        const keyNode = getNode(state, key);
-        if (!certNode || certNode.type !== 'file') errors.push(`cannot load certificate "${cert}": BIO_new_file() failed (SSL: error:80000002:system library::No such file or directory:calling fopen(${cert}, r) error:10000080:BIO routines::no such file)`);
-        else if (!certNode.content.includes('BEGIN CERTIFICATE')) errors.push(`cannot load certificate "${cert}": PEM_read_bio_X509_AUX() failed (SSL: error:0480006C:PEM routines::no start line:Expecting: TRUSTED CERTIFICATE)`);
-        else if (!keyNode || keyNode.type !== 'file') errors.push(`cannot load certificate key "${key}": BIO_new_file() failed (SSL: error:80000002:system library::No such file or directory:calling fopen(${key}, r) error:10000080:BIO routines::no such file)`);
-        else if (!keyNode.content.includes('PRIVATE KEY')) errors.push(`cannot load certificate key "${key}": PEM_read_bio_PrivateKey() failed (SSL: error:0480006C:PEM routines::no start line:Expecting: ANY PRIVATE KEY)`);
+        const problem = certificateProblem(state, cert, key);
+        if (problem) errors.push(problem);
         else s.ssl = { cert, key };
       }
     }
@@ -360,6 +357,54 @@ function buildModel(state: LinuxState, conf: Directive[]): { model: NginxModel; 
     model.servers.push(s);
   }
   return { model, errors };
+}
+
+/**
+ * Why a certificate and key cannot be loaded, or null when they are usable. Shared by
+ * nginx and Apache so both report a missing or malformed file the same way.
+ */
+export function certificateProblem(state: LinuxState, cert: string, key?: string): string | null {
+  const certNode = getNode(state, cert);
+  if (!certNode || certNode.type !== 'file') return `cannot load certificate "${cert}": BIO_new_file() failed (SSL: error:80000002:system library::No such file or directory:calling fopen(${cert}, r) error:10000080:BIO routines::no such file)`;
+  if (!certNode.content.includes('BEGIN CERTIFICATE')) return `cannot load certificate "${cert}": PEM_read_bio_X509_AUX() failed (SSL: error:0480006C:PEM routines::no start line:Expecting: TRUSTED CERTIFICATE)`;
+  if (!key) return 'no certificate key is configured';
+  const keyNode = getNode(state, key);
+  if (!keyNode || keyNode.type !== 'file') return `cannot load certificate key "${key}": BIO_new_file() failed (SSL: error:80000002:system library::No such file or directory:calling fopen(${key}, r) error:10000080:BIO routines::no such file)`;
+  if (!keyNode.content.includes('PRIVATE KEY')) return `cannot load certificate key "${key}": PEM_read_bio_PrivateKey() failed (SSL: error:0480006C:PEM routines::no start line:Expecting: ANY PRIVATE KEY)`;
+  return null;
+}
+
+/**
+ * A configuration snapshot is stored as JSON, not as concatenated text: a real config
+ * file can contain a line that looks like any text separator (ports.conf ships with a
+ * comment naming another config file).
+ */
+export function snapshot(files: Array<{ path: string; text: string }>): string {
+  return JSON.stringify(files);
+}
+
+export function snapshotFiles(text: string): Array<{ path: string; text: string }> {
+  try {
+    const parsed = JSON.parse(text) as Array<{ path: string; text: string }>;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** A state whose filesystem is the snapshot, for re-parsing what a server actually loaded. */
+export function snapshotState(state: LinuxState, files: Array<{ path: string; text: string }>): LinuxState {
+  const fake: LinuxState = { ...state, user: 'root', fs: { ...state.fs } };
+  for (const f of files) fake.fs[f.path] = { type: 'file', content: f.text, owner: 'root', group: 'root', mode: 0o644, mtime: 0 };
+  return fake;
+}
+
+/** Per-server runtime, created on demand so sessions saved before Apache existed still load. */
+export function runtime(state: LinuxState, kind: 'nginx' | 'apache'): ServerRuntime {
+  const web = (state.web ??= { nginx: { listens: [] }, apache: { listens: [] }, rr: {}, requests: [] });
+  web.rr ??= {};
+  web.requests ??= [];
+  return (web[kind] ??= { listens: [] });
 }
 
 /** Name lookup through the host's /etc/hosts (no DNS in the lab network). */
@@ -404,46 +449,55 @@ function modelFromDisk(state: LinuxState): NginxModel | null {
   }
 }
 
+/** Ports the nginx configuration on disk asks for. */
+export function nginxConfiguredPorts(state: LinuxState): number[] {
+  const model = modelFromDisk({ ...state, user: 'root' });
+  return model ? [...new Set(model.servers.flatMap((s) => s.listens.map((l) => l.port)))].sort((a, b) => a - b) : [80];
+}
+
 /** Load (start/reload): validate, then snapshot the configuration nginx serves from. */
 export function loadNginx(state: LinuxState): LoadResult {
   const asRoot = { ...state, user: 'root' };
+  const rt = runtime(state, 'nginx');
   const r = testNginx(asRoot);
   if (!r.ok) {
-    state.web.lastError = r.errors[0];
+    rt.lastError = r.errors[0];
     return r;
   }
-  state.web.loaded = configFiles(asRoot)
-    .map((f) => `# ${f.path}\n${f.text}`)
-    .join('\n');
-  state.web.lastError = undefined;
-  const model = modelFromDisk(asRoot);
-  state.web.listens = model ? [...new Set(model.servers.flatMap((s) => s.listens.map((l) => l.port)))].sort((a, b) => a - b) : [80];
+  rt.loaded = snapshot(configFiles(asRoot));
+  rt.lastError = undefined;
+  rt.listens = nginxConfiguredPorts(asRoot);
   const svc = state.services.nginx;
-  if (svc) svc.ports = state.web.listens;
+  if (svc) svc.ports = rt.listens;
   return r;
 }
 
-/** The model nginx is currently serving from (loaded at start/reload, or lazily for a preconfigured host). */
-export function currentModel(state: LinuxState): NginxModel | null {
-  if (!state.services.nginx?.active) return null;
-  if (state.web.loaded === undefined) {
-    const r = loadNginx(state);
+/** The model a running server is serving from (snapshotted at start/reload, loaded lazily for a preconfigured host). */
+export function currentModel(state: LinuxState, kind: 'nginx' | 'apache' = 'nginx'): NginxModel | null {
+  const service = kind === 'nginx' ? state.services.nginx : state.services.apache2;
+  if (!service?.active) return null;
+  const rt = runtime(state, kind);
+  if (rt.loaded === undefined) {
+    const r = kind === 'nginx' ? loadNginx(state) : loadApache(state);
     if (!r.ok) return null;
   }
-  // Re-parse the snapshot: split back into files by the "# path" markers.
-  const files: Array<{ path: string; text: string }> = [];
-  for (const chunk of state.web.loaded!.split(/^# (?=\/)/m)) {
-    if (!chunk.trim()) continue;
-    const nl = chunk.indexOf('\n');
-    files.push({ path: chunk.slice(0, nl).trim(), text: chunk.slice(nl + 1) });
-  }
-  const snapshot: LinuxState = { ...state, user: 'root', fs: { ...state.fs } };
-  for (const f of files) snapshot.fs[f.path] = { type: 'file', content: f.text, owner: 'root', group: 'root', mode: 0o644, mtime: 0 };
+  if (rt.loaded === undefined) return null;
+  if (kind === 'apache') return apacheModelFromSnapshot(state, rt.loaded);
+  const loaded = snapshotState(state, snapshotFiles(rt.loaded));
   try {
-    return buildModel(snapshot, parseAll(snapshot)).model;
+    return buildModel(loaded, parseAll(loaded)).model;
   } catch {
     return null;
   }
+}
+
+/** The server listening on a port right now, if any. */
+export function serverOnPort(state: LinuxState, port: number): { kind: 'nginx' | 'apache'; model: NginxModel } | null {
+  for (const kind of ['nginx', 'apache'] as const) {
+    const model = currentModel(state, kind);
+    if (model && model.servers.some((s) => s.listens.some((l) => l.port === port))) return { kind, model };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -514,15 +568,17 @@ function serveStatic(state: LinuxState, root: string, uriPath: string, index: st
 
 /** The demo application ("app" service): answers with its hostname so load balancing is visible. */
 function serveApp(state: LinuxState, req: HttpRequest): HttpResponse {
+  runtime(state, 'nginx');
   const custom = state.fs['/opt/app/index.html'];
   const body = custom?.content ?? `Hello from ${state.hostname}\n`;
   const res: HttpResponse = { status: 200, statusText: 'OK', headers: { Server: 'netlab-app/1.0', 'Content-Type': custom ? 'text/html' : 'text/plain', 'Content-Length': String(body.length), 'X-Backend': state.hostname }, body: req.path.startsWith('/health') ? 'ok\n' : body };
   if (req.path.startsWith('/health')) res.headers['Content-Length'] = '3';
-  state.web.requests.push({ scheme: req.scheme, host: req.host, path: req.path, status: 200, server: 'app' });
+  state.web.requests.push({ scheme: req.scheme, host: req.host, path: req.path, status: 200, server: 'app', engine: 'app' });
   return res;
 }
 
 function pickBackend(state: LinuxState, up: Upstream, healthy: (s: UpstreamServer) => boolean, clientIp?: string): UpstreamServer | null {
+  runtime(state, 'nginx');
   const primary = up.servers.filter((s) => !s.down && !s.backup);
   const backups = up.servers.filter((s) => !s.down && s.backup);
   const tryList = (list: UpstreamServer[]): UpstreamServer | null => {
@@ -558,13 +614,14 @@ export function serveHttp(net: NetworkState, hostId: string, req: HttpRequest, d
     if (req.probe) return respond(200, '');
     return serveApp(state, req);
   }
-  const model = currentModel(state);
-  if (!model) return { error: 'refused' };
+  const picked = serverOnPort(state, req.port);
+  if (!picked) return { error: 'refused' };
+  const { kind, model } = picked;
   const hit = matchServer(model, req);
   if (!hit) return { error: 'refused' };
   const { server, listen } = hit;
   const record = (status: number, backend?: string) => {
-    if (!req.probe) state.web.requests.push({ scheme: req.scheme, host: req.host, path: req.path, status, server: server.names[0] ?? '_', backend });
+    if (!req.probe) runtime(state, kind) && state.web.requests.push({ scheme: req.scheme, host: req.host, path: req.path, status, server: server.names[0] ?? '_', backend, engine: kind });
   };
   if (req.scheme === 'https' && !listen.ssl) return { error: 'tls-to-plain' };
   if (req.probe) return respond(200, '');
@@ -594,6 +651,10 @@ export function serveHttp(net: NetworkState, hostId: string, req: HttpRequest, d
     return finish(respond(code, target ? target + '\n' : errorPage(code), { 'Content-Type': 'text/plain' }));
   }
   const proxy = get('proxy_pass');
+  if (proxy && kind === 'apache' && proxyHandlerMissing(state)) {
+    // mod_proxy alone cannot speak http; Apache logs AH01144 and answers 500.
+    return finish(respond(500, errorPage(500)));
+  }
   if (proxy) {
     const m = (proxy.args[0] ?? '').match(/^(https?):\/\/([^/:]+)(?::(\d+))?(\/.*)?$/)!;
     const targetName = m[2];
@@ -636,9 +697,23 @@ export function serveHttp(net: NetworkState, hostId: string, req: HttpRequest, d
 
 /** Ports nginx listens on (for ss). */
 export function nginxPorts(state: LinuxState): number[] {
-  const m = currentModel(state);
+  const m = currentModel(state, 'nginx');
   if (m) return [...new Set(m.servers.flatMap((s) => s.listens.map((l) => l.port)))].sort((a, b) => a - b);
-  return state.web.listens.length ? state.web.listens : [80];
+  const rt = runtime(state, 'nginx');
+  return rt.listens.length ? rt.listens : [80];
+}
+
+/** Ports a running server actually listens on, for ss. */
+export function servicePorts(state: LinuxState, service: string): number[] {
+  if (service === 'nginx') return nginxPorts(state);
+  if (service === 'apache2') {
+    const m = currentModel(state, 'apache');
+    if (m) return [...new Set(m.servers.flatMap((s) => s.listens.map((l) => l.port)))].sort((a, b) => a - b);
+    const rt = runtime(state, 'apache');
+    return rt.listens.length ? rt.listens : [80];
+  }
+  const s = state.services[service];
+  return s?.ports ?? (s?.port ? [s.port] : []);
 }
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,8 @@
  * users and groups, services, processes and the shell state a learner sees.
  * Pure data; the shell and the commands operate on it.
  */
+import { installApacheFiles, loadApache } from './apache';
+import { loadNginx } from './web';
 
 export interface FsNode {
   type: 'file' | 'dir' | 'link';
@@ -52,14 +54,22 @@ export interface WebRequestRecord {
   status: number;
   server?: string;
   backend?: string;
+  /** Which server answered. */
+  engine?: 'nginx' | 'apache' | 'app';
 }
 
-/** nginx runtime state: the configuration it serves from, round-robin pointers and the request log. */
-export interface WebState {
-  /** Snapshot of the configuration files at the last successful start/reload. */
+/** What one web server is serving right now. */
+export interface ServerRuntime {
+  /** Snapshot of the configuration files at the last successful start or reload. */
   loaded?: string;
   listens: number[];
   lastError?: string;
+}
+
+/** Web runtime state: one entry per server, plus round-robin pointers and the request log. */
+export interface WebState {
+  nginx: ServerRuntime;
+  apache: ServerRuntime;
   rr: Record<string, number>;
   requests: WebRequestRecord[];
 }
@@ -112,10 +122,12 @@ export interface LinuxState {
 }
 
 export interface LinuxFileSpec {
-  content: string;
+  content?: string;
   mode?: number;
   owner?: string;
   group?: string;
+  /** Make the path a symbolic link to this target instead of a regular file. */
+  link?: string;
 }
 
 export interface LinuxServiceSpec {
@@ -521,7 +533,7 @@ export function createLinuxState(spec: LinuxSpec, hostName: string): LinuxState 
     pythonRuns: [],
     clock: 100,
     history: [],
-    web: { listens: [], rr: {}, requests: [] },
+    web: { nginx: { listens: [] }, apache: { listens: [] }, rr: {}, requests: [] },
   };
   let uid = 1000;
   const addUser = (u: LinuxUserSpec) => {
@@ -551,6 +563,7 @@ export function createLinuxState(spec: LinuxSpec, hostName: string): LinuxState 
     if (state.services[name].active) state.processes.push({ pid: state.nextPid++, user: name === 'nginx' || name === 'apache2' ? 'www-data' : 'root', cmd: daemonCommand(name) });
   }
   if (state.packages.includes('nginx')) installNginxFiles(state);
+  if (state.packages.includes('apache2')) installApacheFiles(state);
   if (state.packages.includes('netlab-app')) installAppFiles(state);
   installSslDirs(state);
   for (const [rawPath, value] of Object.entries(spec.files ?? {})) {
@@ -566,8 +579,12 @@ export function createLinuxState(spec: LinuxSpec, hostName: string): LinuxState 
       parent = parentPath(parent);
     }
     for (const dir of missing) state.fs[dir] = { type: 'dir', content: '', owner: f.owner ?? defaultOwner, group: f.group ?? f.owner ?? defaultOwner, mode: 0o755, mtime: 0 };
-    state.fs[path] = { type: 'file', content: f.content, owner: f.owner ?? defaultOwner, group: f.group ?? f.owner ?? defaultOwner, mode: f.mode ?? 0o644, mtime: 0 };
+    state.fs[path] = f.link
+      ? { type: 'link', content: '', target: f.link, owner: f.owner ?? defaultOwner, group: f.group ?? f.owner ?? defaultOwner, mode: f.mode ?? 0o777, mtime: 0 }
+      : { type: 'file', content: f.content ?? '', owner: f.owner ?? defaultOwner, group: f.group ?? f.owner ?? defaultOwner, mode: f.mode ?? 0o644, mtime: 0 };
   }
+  if (state.services.nginx?.active) loadNginx(state);
+  if (state.services.apache2?.active) loadApache(state);
   return state;
 }
 
@@ -671,6 +688,8 @@ export function daemonCommand(service: string): string {
       return '/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock';
     case 'app':
       return '/usr/bin/python3 /opt/app/server.py --port 8080';
+    case 'apache2':
+      return '/usr/sbin/apache2 -k start';
     default:
       return `/usr/sbin/${service}`;
   }

@@ -91,6 +91,7 @@ export const LFCS_TOPICS: Record<string, string> = {
   'NW.5': 'Configure a web server: virtual hosts, static content and reverse proxying (nginx)',
   'NW.6': 'Secure a service with TLS certificates and redirect plain HTTP',
   'NW.7': 'Distribute traffic across backends with a load balancer and handle backend failures',
+  'NW.8': 'Manage a modular web server: enable modules and sites, and resolve port conflicts',
 };
 
 export const linuxPath: LearningPath = {
@@ -106,7 +107,7 @@ export const linuxPath: LearningPath = {
     'Set permissions and ownership correctly, manage users and groups, and escalate privilege with sudo only when needed.',
     'Install packages, run and enable services with systemd, and read processes and logs to diagnose a server.',
     'Inspect addressing and routing from the host, test reachability, and call a router API with curl.',
-    'Configure nginx as a web server, TLS terminator, reverse proxy and load balancer, and troubleshoot it with nginx -t and curl.',
+    'Configure nginx and Apache as web servers, TLS terminators, reverse proxies and load balancers, and troubleshoot them with nginx -t, apache2ctl configtest and curl.',
     'Write Bash scripts with variables, conditions, loops and functions, and build text-processing pipelines.',
     'Run real Python in the browser to read files and JSON, generate configuration, and audit a system.',
   ],

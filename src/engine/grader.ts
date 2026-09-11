@@ -4,6 +4,7 @@ import { renderConfigBody } from './ios/show';
 import { channelStatus, ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, stpRoot, stpVlan, type ChannelProtocol, type HostState, type NetworkState, type RouteEntry } from './network';
 import { getNode, normalizePath, octal } from './linux/fs';
 import { testNginx } from './linux/web';
+import { enabledModules, enabledSites, testApache } from './linux/apache';
 import type { AclAddr, AclEntry, AclProtocol, ApiRequest, CliErrorKind, DeviceState, LineState, Mode, PortMode, SnmpMode, SyslogLevel } from './types';
 
 interface Base {
@@ -121,13 +122,19 @@ export type Check = Base &
     /** python3 ran (a given file, or any) and exited with `exitCode` (default 0); `pattern` is a regex over its stdout. */
     | { type: 'python-run'; file?: string; exitCode?: number; pattern?: string }
     | { type: 'process'; pattern: string; running?: boolean }
-    /** nginx (or the demo app) on a Linux host answered a request; host/path are regexes, backend is a host id. */
-    | { type: 'web-request'; scheme?: 'http' | 'https'; host?: string; path?: string; status?: number; backend?: string; server?: string }
+    /** A web server on a Linux host answered a request; host/path are regexes, backend is a host id. */
+    | { type: 'web-request'; scheme?: 'http' | 'https'; host?: string; path?: string; status?: number; backend?: string; server?: string; engine?: 'nginx' | 'apache' | 'app' }
     /** The nginx configuration on disk passes nginx -t (or fails, with valid: false). */
     | { type: 'nginx-config'; valid: boolean }
+    /** The Apache configuration on disk passes apache2ctl configtest (or fails, with valid: false). */
+    | { type: 'apache-config'; valid: boolean }
+    /** An Apache module is enabled (a2enmod), or disabled with enabled: false. */
+    | { type: 'apache-module'; name: string; enabled?: boolean }
+    /** An Apache site is enabled (a2ensite), or disabled with enabled: false. */
+    | { type: 'apache-site'; name: string; enabled?: boolean }
   );
 
-const LINUX_CHECKS = new Set(['file', 'linux-user', 'linux-group', 'service', 'package', 'linux-hostname', 'shell-output', 'python-run', 'process', 'web-request', 'nginx-config']);
+const LINUX_CHECKS = new Set(['file', 'linux-user', 'linux-group', 'service', 'package', 'linux-hostname', 'shell-output', 'python-run', 'process', 'web-request', 'nginx-config', 'apache-config', 'apache-module', 'apache-site']);
 
 export interface Objective {
   id: string;
@@ -159,7 +166,7 @@ function describe(check: Check): string {
   const on = check.device ? ` on ${check.device}` : '';
   switch (check.type) {
     case 'command':
-      return `Run ${check.pattern.replace(/[\^$]/g, '')}${on}`;
+      return `Run ${readable(check.pattern)}${on}`;
     case 'mode':
       return `Reach ${check.mode} mode${on}`;
     case 'hostname':
@@ -313,6 +320,12 @@ function describe(check: Check): string {
       return `Served ${check.scheme ? check.scheme.toUpperCase() + ' ' : ''}${check.host ? 'Host ' + readable(check.host) + ' ' : ''}${check.path ? readable(check.path) + ' ' : ''}${check.status ? 'with ' + check.status + ' ' : ''}${check.backend ? 'from backend ' + check.backend : ''}`.trim() + on;
     case 'nginx-config':
       return `nginx configuration ${check.valid ? 'passes' : 'fails'} nginx -t${on}`;
+    case 'apache-config':
+      return `Apache configuration ${check.valid ? 'passes' : 'fails'} apache2ctl configtest${on}`;
+    case 'apache-module':
+      return `Apache module ${check.name} is ${check.enabled === false ? 'disabled' : 'enabled'}${on}`;
+    case 'apache-site':
+      return `Apache site ${check.name} is ${check.enabled === false ? 'disabled' : 'enabled'}${on}`;
   }
 }
 
@@ -380,10 +393,16 @@ function evaluateLinuxCheck(check: Check, lx: NonNullable<HostState['linux']>, s
     case 'web-request': {
       const host = check.host ? new RegExp(check.host, 'i') : null;
       const path = check.path ? new RegExp(check.path) : null;
-      return lx.web.requests.some((r) => (check.scheme === undefined || r.scheme === check.scheme) && (host === null || host.test(r.host)) && (path === null || path.test(r.path)) && (check.status === undefined || r.status === check.status) && (check.backend === undefined || r.backend === check.backend) && (check.server === undefined || r.server === check.server));
+      return (lx.web?.requests ?? []).some((r) => (check.scheme === undefined || r.scheme === check.scheme) && (host === null || host.test(r.host)) && (path === null || path.test(r.path)) && (check.status === undefined || r.status === check.status) && (check.backend === undefined || r.backend === check.backend) && (check.server === undefined || r.server === check.server) && (check.engine === undefined || r.engine === check.engine));
     }
     case 'nginx-config':
       return testNginx({ ...lx, user: 'root' }).ok === check.valid;
+    case 'apache-config':
+      return testApache({ ...lx, user: 'root' }).ok === check.valid;
+    case 'apache-module':
+      return enabledModules(lx).includes(check.name) === (check.enabled ?? true);
+    case 'apache-site':
+      return enabledSites(lx).includes(check.name.endsWith('.conf') ? check.name : `${check.name}.conf`) === (check.enabled ?? true);
   }
   return false;
 }

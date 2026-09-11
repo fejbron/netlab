@@ -246,6 +246,58 @@ describe('reference solutions pass', () => {
     'lx-33-exam-web-front-end': ['sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/www.key -out /etc/ssl/certs/www.crt -subj "/CN=www.lab.local"', 'sudo mkdir -p /var/www/www', 'echo "<h1>Production site</h1>" | sudo tee /var/www/www/index.html', ...TEE('/etc/nginx/conf.d/www.conf', 'upstream backend {', '    least_conn;', '    server 192.168.2.50:8080;', '    server 192.168.2.51:8080;', '}', 'server {', '    listen 80;', '    server_name www.lab.local;', '    return 301 https://$host$request_uri;', '}', 'server {', '    listen 443 ssl;', '    server_name www.lab.local;', '    ssl_certificate /etc/ssl/certs/www.crt;', '    ssl_certificate_key /etc/ssl/private/www.key;', '    add_header Strict-Transport-Security "max-age=31536000" always;', '    root /var/www/www;', '    index index.html;', '    location /api/ {', '        proxy_pass http://backend/;', '        proxy_set_header Host $host;', '    }', '}'), 'sudo nginx -t', 'sudo systemctl enable --now nginx', 'echo "127.0.0.1 www.lab.local" | sudo tee -a /etc/hosts', 'curl -I http://www.lab.local', 'curl -kI https://www.lab.local', 'for i in 1 2 3 4; do curl -sk https://www.lab.local/api/; done'],
   });
 
+  const A_TLS = ['<VirtualHost *:80>', '    ServerName netlab.lab.local', '    DocumentRoot /var/www/netlab', '</VirtualHost>', '<VirtualHost *:443>', '    ServerName netlab.lab.local', '    DocumentRoot /var/www/netlab', '    SSLEngine on', '    SSLCertificateFile /etc/ssl/certs/netlab.crt', '    SSLCertificateKeyFile /etc/ssl/private/netlab.key', '</VirtualHost>'];
+  const A_CERT = 'sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/netlab.key -out /etc/ssl/certs/netlab.crt -subj "/CN=netlab.lab.local"';
+  Object.assign(solutions, {
+    'lx-34-install-apache': ['sudo apt install -y apache2', 'ls /etc/apache2', 'ls -l /etc/apache2/sites-enabled', 'sudo apache2ctl configtest', 'sudo apache2ctl -M', 'curl http://192.168.1.50', 'PC-A: curl http://192.168.1.50'],
+    'lx-35-apache-virtual-host': [...TEE('/etc/apache2/sites-available/netlab.conf', '<VirtualHost *:80>', '    ServerName netlab.lab.local', '    DocumentRoot /var/www/netlab', '</VirtualHost>'), 'sudo a2ensite netlab', 'curl http://netlab.lab.local', 'sudo apache2ctl configtest', 'sudo systemctl reload apache2', 'curl http://netlab.lab.local', 'curl -H "Host: nobody.example" http://192.168.1.50'],
+    'lx-36-troubleshoot-apache': ['sudo systemctl start apache2', 'sudo apache2ctl configtest', "sudo sed -i 's/DocumnetRoot/DocumentRoot/' /etc/apache2/sites-available/netlab.conf", "echo '</VirtualHost>' | sudo tee -a /etc/apache2/sites-available/netlab.conf", 'sudo apache2ctl configtest', 'sudo systemctl start apache2', 'curl http://netlab.lab.local'],
+    'lx-37-apache-tls': [...TEE('/etc/apache2/sites-available/netlab.conf', ...A_TLS), 'sudo apache2ctl configtest', 'sudo a2enmod ssl', A_CERT, 'sudo apache2ctl configtest', 'sudo systemctl restart apache2', 'ss -tln', 'curl https://netlab.lab.local', 'curl -k https://netlab.lab.local'],
+    'lx-38-apache-redirect-hsts': [
+      ...TEE('/etc/apache2/sites-available/netlab.conf', '<VirtualHost *:80>', '    ServerName netlab.lab.local', '    Redirect permanent / https://netlab.lab.local/', '</VirtualHost>', '<VirtualHost *:443>', '    ServerName netlab.lab.local', '    DocumentRoot /var/www/netlab', '    SSLEngine on', '    SSLCertificateFile /etc/ssl/certs/netlab.crt', '    SSLCertificateKeyFile /etc/ssl/private/netlab.key', '    Header always set Strict-Transport-Security "max-age=31536000"', '</VirtualHost>'),
+      'sudo a2enmod headers', 'sudo apache2ctl configtest', 'sudo systemctl restart apache2', 'curl -I http://netlab.lab.local', 'curl -kLi http://netlab.lab.local',
+    ],
+    'lx-39-apache-reverse-proxy': [
+      'curl http://192.168.2.50:8080',
+      ...TEE('/etc/apache2/sites-available/netlab.conf', '<VirtualHost *:80>', '    ServerName netlab.lab.local', '    DocumentRoot /var/www/netlab', '    ProxyPass /app/ http://192.168.2.50:8080/', '    ProxyPassReverse /app/ http://192.168.2.50:8080/', '</VirtualHost>'),
+      'sudo a2enmod proxy', 'sudo apache2ctl configtest', 'sudo systemctl restart apache2', 'curl http://netlab.lab.local/app/', 'sudo a2enmod proxy_http', 'sudo systemctl restart apache2', 'curl http://netlab.lab.local/app/', 'curl http://netlab.lab.local/',
+    ],
+    'lx-40-apache-load-balancing': [
+      'sudo a2enmod proxy_balancer lbmethod_byrequests',
+      ...TEE('/etc/apache2/sites-available/netlab.conf', '<VirtualHost *:80>', '    ServerName netlab.lab.local', '    DocumentRoot /var/www/netlab', '    <Proxy balancer://cluster>', '        BalancerMember http://192.168.2.50:8080', '        BalancerMember http://192.168.2.51:8080', '    </Proxy>', '    ProxyPass /app/ balancer://cluster/', '</VirtualHost>'),
+      'sudo apache2ctl configtest', 'sudo systemctl restart apache2', 'for i in 1 2 3 4; do curl -s http://netlab.lab.local/app/; done',
+    ],
+    'lx-41-apache-port-conflict': ['sudo systemctl start apache2', 'systemctl status apache2', 'sudo ss -tlnp', 'sudo systemctl disable --now nginx', 'sudo systemctl enable --now apache2', 'curl http://192.168.1.50'],
+    'lx-42-exam-apache-front-end': [
+      'sudo a2enmod ssl headers proxy proxy_http proxy_balancer lbmethod_byrequests',
+      'sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/private/www.key -out /etc/ssl/certs/www.crt -subj "/CN=www.lab.local"',
+      'sudo mkdir -p /var/www/www',
+      'echo "<h1>Production site</h1>" | sudo tee /var/www/www/index.html',
+      ...TEE(
+        '/etc/apache2/sites-available/www.conf',
+        '<VirtualHost *:80>',
+        '    ServerName www.lab.local',
+        '    Redirect permanent / https://www.lab.local/',
+        '</VirtualHost>',
+        '<VirtualHost *:443>',
+        '    ServerName www.lab.local',
+        '    DocumentRoot /var/www/www',
+        '    SSLEngine on',
+        '    SSLCertificateFile /etc/ssl/certs/www.crt',
+        '    SSLCertificateKeyFile /etc/ssl/private/www.key',
+        '    Header always set Strict-Transport-Security "max-age=31536000"',
+        '    <Proxy balancer://cluster>',
+        '        BalancerMember http://192.168.2.50:8080',
+        '        BalancerMember http://192.168.2.51:8080',
+        '    </Proxy>',
+        '    ProxyPass /api/ balancer://cluster/',
+        '</VirtualHost>',
+      ),
+      'sudo a2ensite www', 'sudo apache2ctl configtest', 'sudo systemctl restart apache2',
+      'curl -I http://www.lab.local', 'curl -kI https://www.lab.local', 'for i in 1 2 3 4; do curl -sk https://www.lab.local/api/; done',
+    ],
+  });
+
   const HOME = '/home/student';
   const fakes: Record<string, Fake> = {
     'lx-20-hello-python': (p) => ({ stdout: p.argv[0] === '-c' ? 'Hello from Python\n' : 'Hello, NetLab!\n' }),

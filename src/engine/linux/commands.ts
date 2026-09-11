@@ -36,7 +36,8 @@ import {
   type LinuxState,
 } from './fs';
 import { fail, ok, type CmdCtx, type CmdResult, type Command } from './shell';
-import { loadNginx, makeCertificate, makePrivateKey, nginxPorts, opensslDate, parseCertificate, testNginx } from './web';
+import { loadNginx, makeCertificate, makePrivateKey, opensslDate, parseCertificate, runtime, servicePorts, testNginx } from './web';
+import { APACHE_MODULES, apacheModelFromDisk, enabledModules, installApacheFiles, loadApache, testApache } from './apache';
 import { installAppFiles, installNginxFiles } from './fs';
 
 // ---------------------------------------------------------------------------
@@ -1215,7 +1216,10 @@ export const COMMANDS: Record<string, Command> = {
             out.push(`${svc.active ? '●' : '○'} ${name}.service - ${svc.description}`, `     Loaded: loaded (/usr/lib/systemd/system/${name}.service; ${svc.enabled ? 'enabled' : 'disabled'}; preset: enabled)`, `     Active: ${svc.active ? 'active (running)' : 'inactive (dead)'}${svc.active ? ` since ${since}` : ''}`);
             if (svc.active && proc) out.push(`   Main PID: ${proc.pid} (${baseName(proc.cmd.split(' ')[0]).replace(/:$/, '')})`, '      Tasks: 2 (limit: 4556)', '     Memory: 3.1M (peak: 4.0M)', '        CPU: 42ms', `     CGroup: /system.slice/${name}.service`, `             └─${proc.pid} ${proc.cmd}`);
             if (svc.active) out.push('', `Sep 11 08:55:12 ${st.hostname} systemd[1]: Started ${svc.description}.`);
-            else if (name === 'nginx' && st.web.lastError) out.push('', `Sep 11 09:10:02 ${st.hostname} nginx[${st.nextPid}]: ${st.web.lastError}`, `Sep 11 09:10:02 ${st.hostname} nginx[${st.nextPid}]: nginx: configuration file /etc/nginx/nginx.conf test failed`, `Sep 11 09:10:02 ${st.hostname} systemd[1]: nginx.service: Control process exited, code=exited, status=1/FAILURE`, `Sep 11 09:10:02 ${st.hostname} systemd[1]: Failed to start ${svc.description}.`);
+            else if ((name === 'nginx' || name === 'apache2') && runtime(st, name === 'apache2' ? 'apache' : 'nginx').lastError) {
+              const last = runtime(st, name === 'apache2' ? 'apache' : 'nginx').lastError!;
+              out.push('', ...last.split('\n').map((l) => `Sep 11 09:10:02 ${st.hostname} ${name}[${st.nextPid}]: ${l}`), `Sep 11 09:10:02 ${st.hostname} systemd[1]: ${name}.service: Control process exited, code=exited, status=1/FAILURE`, `Sep 11 09:10:02 ${st.hostname} systemd[1]: Failed to start ${svc.description}.`);
+            }
             else out.push('', `Sep 11 08:55:12 ${st.hostname} systemd[1]: Stopped ${svc.description}.`);
             if (units.length > 1) out.push('');
             break;
@@ -1239,16 +1243,21 @@ export const COMMANDS: Record<string, Command> = {
               break;
             }
             if (verb === 'start' || verb === 'restart' || verb === 'reload') {
-              if (name === 'nginx') {
-                const r = loadNginx(st);
-                if (!r.ok) {
-                  err.push(`Job for nginx.service failed because the control process exited with error code.`, `See "systemctl status nginx.service" and "journalctl -xeu nginx.service" for details.`);
-                  if (verb !== 'reload') {
-                    svc.active = false;
-                    st.processes = st.processes.filter((x) => x.cmd !== daemonCommand(name));
-                  }
-                  break;
+              const jobFailed = () => err.push(`Job for ${name}.service failed because the control process exited with error code.`, `See "systemctl status ${name}.service" and "journalctl -xeu ${name}.service" for details.`);
+              const load = name === 'nginx' ? loadNginx : name === 'apache2' ? loadApache : null;
+              if (load && !load(st).ok) {
+                jobFailed();
+                if (verb !== 'reload') {
+                  svc.active = false;
+                  st.processes = st.processes.filter((x) => x.cmd !== daemonCommand(name));
                 }
+                break;
+              }
+              const clash = svc.active ? undefined : portClash(st, name);
+              if (clash) {
+                runtime(st, name === 'apache2' ? 'apache' : 'nginx').lastError = name === 'apache2' ? `(98)Address already in use: AH00072: make_sock: could not bind to address 0.0.0.0:${clash.port}` : `nginx: [emerg] bind() to 0.0.0.0:${clash.port} failed (98: Address already in use)`;
+                jobFailed();
+                break;
               }
               if (!svc.active) {
                 svc.active = true;
@@ -1263,8 +1272,11 @@ export const COMMANDS: Record<string, Command> = {
               svc.enabled = true;
               out.push(`Created symlink /etc/systemd/system/multi-user.target.wants/${name}.service → /usr/lib/systemd/system/${name}.service.`);
               if (p.flags.has('now') && !svc.active) {
-                if (name === 'nginx' && !loadNginx(st).ok) {
-                  err.push(`Job for nginx.service failed because the control process exited with error code.`, `See "systemctl status nginx.service" and "journalctl -xeu nginx.service" for details.`);
+                const load = name === 'nginx' ? loadNginx : name === 'apache2' ? loadApache : null;
+                const clash = load && load(st).ok ? portClash(st, name) : undefined;
+                if ((load && !load(st).ok) || clash) {
+                  if (clash) runtime(st, name === 'apache2' ? 'apache' : 'nginx').lastError = name === 'apache2' ? `(98)Address already in use: AH00072: make_sock: could not bind to address 0.0.0.0:${clash.port}` : `nginx: [emerg] bind() to 0.0.0.0:${clash.port} failed (98: Address already in use)`;
+                  err.push(`Job for ${name}.service failed because the control process exited with error code.`, `See "systemctl status ${name}.service" and "journalctl -xeu ${name}.service" for details.`);
                   break;
                 }
                 svc.active = true;
@@ -1515,10 +1527,7 @@ export const COMMANDS: Record<string, Command> = {
               st.services[known.service] = { name: known.service, description: ks.description, active: false, enabled: false, port: ks.port };
               if (known.service === 'nginx') installNginxFiles(st);
               if (known.service === 'app') installAppFiles(st);
-              if (known.service === 'apache2') {
-                st.fs['/var/www/html'] ??= { type: 'dir', content: '', owner: 'root', group: 'root', mode: 0o755, mtime: ++st.clock };
-                st.fs['/var/www/html/index.html'] ??= { type: 'file', content: '<!DOCTYPE html>\n<html>\n<head><title>Apache2 Ubuntu Default Page</title></head>\n<body><h1>It works!</h1></body>\n</html>\n', owner: 'root', group: 'root', mode: 0o644, mtime: st.clock };
-              }
+              if (known.service === 'apache2') installApacheFiles(st);
               out.push(`Created symlink /etc/systemd/system/multi-user.target.wants/${known.service}.service → /usr/lib/systemd/system/${known.service}.service.`);
               st.services[known.service].enabled = true;
               st.services[known.service].active = true;
@@ -1621,7 +1630,7 @@ export const COMMANDS: Record<string, Command> = {
       for (const s of listening) {
         const proc = ctx.state.processes.find((x) => x.cmd === daemonCommand(s.name));
         const pname = baseName(proc?.cmd.split(' ')[0] ?? s.name).replace(/:$/, '');
-        const ports = s.name === 'nginx' ? nginxPorts(ctx.state) : (s.ports ?? [s.port!]);
+        const ports = servicePorts(ctx.state, s.name);
         for (const port of ports) out.push(`tcp   LISTEN 0      ${port === 22 ? 128 : 511}    ${`0.0.0.0:${port}`.padEnd(19)}${'0.0.0.0:*'.padEnd(18)}${showProc ? (isRoot(ctx.state) ? `users:(("${pname}",pid=${proc?.pid ?? 0},fd=6))` : '') : ''}`.trimEnd());
       }
       return ok(out);
@@ -1749,6 +1758,38 @@ export const COMMANDS: Record<string, Command> = {
         return fail([`nginx: invalid option: "-s ${a[1] ?? ''}"`]);
       }
       return fail(['nginx: this simulator runs nginx through systemd; use sudo systemctl start nginx, nginx -t or sudo nginx -s reload.']);
+    },
+  },
+  a2enmod: {
+    help: 'enable an Apache module',
+    run: (ctx) => apacheToggle(ctx, 'mod', true),
+  },
+  a2dismod: {
+    help: 'disable an Apache module',
+    run: (ctx) => apacheToggle(ctx, 'mod', false),
+  },
+  a2ensite: {
+    help: 'enable an Apache site',
+    run: (ctx) => apacheToggle(ctx, 'site', true),
+  },
+  a2dissite: {
+    help: 'disable an Apache site',
+    run: (ctx) => apacheToggle(ctx, 'site', false),
+  },
+  a2enconf: { help: 'enable an Apache configuration snippet', run: (ctx) => apacheToggle(ctx, 'conf', true) },
+  a2disconf: { help: 'disable an Apache configuration snippet', run: (ctx) => apacheToggle(ctx, 'conf', false) },
+  apache2ctl: {
+    help: 'Apache HTTP Server control interface (configtest, -M, -S)',
+    run: (ctx) => apachectl(ctx),
+  },
+  apachectl: { help: 'Apache HTTP Server control interface', run: (ctx) => apachectl(ctx) },
+  apache2: {
+    help: 'Apache HTTP Server',
+    run: (ctx) => {
+      if (!ctx.state.packages.includes('apache2')) return fail(["Command 'apache2' not found, but can be installed with:", 'sudo apt install apache2'], 127);
+      if (ctx.args[0] === '-v') return ok(['Server version: Apache/2.4.58 (Ubuntu)', 'Server built:   2026-01-15T00:00:00']);
+      if (ctx.args[0] === '-t' || ctx.args[0] === '-M' || ctx.args[0] === '-S') return apachectl(ctx);
+      return fail(['apache2: this simulator runs Apache through systemd; use sudo systemctl start apache2, or apache2ctl configtest.']);
     },
   },
   openssl: {
@@ -1899,6 +1940,96 @@ export function splitSedScript(script: string): string[] {
     if (op) ops.push(op);
   }
   return ops;
+}
+
+/** A service already listening on a port this one wants. */
+function portClash(st: LinuxState, name: string): { service: string; port: number } | undefined {
+  const wanted = servicePorts(st, name);
+  for (const other of Object.values(st.services)) {
+    if (!other.active || other.name === name) continue;
+    const port = servicePorts(st, other.name).find((p) => wanted.includes(p));
+    if (port !== undefined) return { service: other.name, port };
+  }
+  return undefined;
+}
+
+/** a2enmod / a2ensite / a2enconf and their dis- counterparts, which are all symlink management. */
+function apacheToggle(ctx: CmdCtx, kind: 'mod' | 'site' | 'conf', enable: boolean): CmdResult {
+  const st = ctx.state;
+  if (!st.packages.includes('apache2')) return fail([`Command '${ctx.name}' not found, but can be installed with:`, 'sudo apt install apache2'], 127);
+  const names = parseArgs(ctx.args).operands;
+  if (!names.length) return fail([`Your choices are: ${(kind === 'mod' ? Object.keys(APACHE_MODULES) : listDir(st, `/etc/apache2/${kind === 'site' ? 'sites' : 'conf'}-available`).map((n) => n.replace(/\.conf$/, ''))).join(' ')}`, `Which ${kind === 'mod' ? 'module(s)' : kind === 'site' ? 'site(s)' : 'conf(s)'} do you want to ${enable ? 'enable' : 'disable'} (wildcards ok)?`], 1);
+  const d = requireRoot(ctx, `ERROR: Could not write to /etc/apache2: Permission denied. Try again with sudo.`);
+  if (d) return d;
+  const dirName = kind === 'mod' ? 'mods' : kind === 'site' ? 'sites' : 'conf';
+  const out: string[] = [];
+  const err: string[] = [];
+  let changed = false;
+  for (const raw of names) {
+    const name = raw.replace(/\.(conf|load)$/, '');
+    const files = kind === 'mod' ? [`${name}.load`, `${name}.conf`] : [`${name}.conf`];
+    const available = files.filter((f) => getNode(st, `/etc/apache2/${dirName}-available/${f}`)?.type === 'file');
+    if (!available.length) {
+      err.push(`ERROR: ${kind === 'mod' ? 'Module' : kind === 'site' ? 'Site' : 'Conf'} ${name} does not exist!`);
+      continue;
+    }
+    const label = kind === 'mod' ? 'Module' : kind === 'site' ? 'Site' : 'Conf';
+    if (enable) {
+      const already = available.every((f) => getNode(st, `/etc/apache2/${dirName}-enabled/${f}`, false));
+      if (already) {
+        out.push(`${label} ${name} already enabled`);
+        continue;
+      }
+      for (const f of available) st.fs[`/etc/apache2/${dirName}-enabled/${f}`] = { type: 'link', content: '', target: `/etc/apache2/${dirName}-available/${f}`, owner: 'root', group: 'root', mode: 0o777, mtime: ++st.clock };
+      out.push(`Enabling ${label.toLowerCase()} ${name}.`);
+      changed = true;
+    } else {
+      const present = files.filter((f) => getNode(st, `/etc/apache2/${dirName}-enabled/${f}`, false));
+      if (!present.length) {
+        out.push(`${label} ${name} already disabled`);
+        continue;
+      }
+      for (const f of present) delete st.fs[`/etc/apache2/${dirName}-enabled/${f}`];
+      out.push(`${label} ${name} disabled.`);
+      changed = true;
+    }
+  }
+  if (changed) out.push('To activate the new configuration, you need to run:', kind === 'site' || kind === 'conf' ? '  systemctl reload apache2' : '  systemctl restart apache2');
+  return { out, err, code: err.length ? 1 : 0 };
+}
+
+function apachectl(ctx: CmdCtx): CmdResult {
+  const st = ctx.state;
+  if (!st.packages.includes('apache2')) return fail(["Command 'apache2ctl' not found, but can be installed with:", 'sudo apt install apache2'], 127);
+  const verb = ctx.args[0] ?? 'help';
+  if (verb === 'configtest' || verb === '-t') {
+    const r = testApache(st);
+    if (r.ok) return fail([...r.warnings, 'Syntax OK'], 0);
+    return fail([...r.warnings, ...r.errors.flatMap((e) => e.split('\n')), "Action 'configtest' failed.", 'The Apache error log may have more information.'], 1);
+  }
+  if (verb === '-M' || verb === '-t' + 'M') {
+    const mods = enabledModules(st);
+    return ok(['Loaded Modules:', ' core_module (static)', ' so_module (static)', ' http_module (static)', ...mods.map((m) => ` ${m}_module (shared)`)]);
+  }
+  if (verb === '-S') {
+    const model = apacheModelFromDisk(st);
+    if (!model) return apachectl({ ...ctx, args: ['configtest'] });
+    const out = ['VirtualHost configuration:'];
+    for (const s of model.servers) for (const l of s.listens) out.push(`*:${String(l.port).padEnd(21)}${s.names[0] ?? '(no ServerName)'} (${s.file}:${s.line})`);
+    if (model.servers.length === 0) out.push('(no virtual hosts)');
+    out.push('ServerRoot: "/etc/apache2"', 'Main DocumentRoot: "/var/www/html"', 'PidFile: "/var/run/apache2/apache2.pid"', `User: name="www-data" id=33`, `Group: name="www-data" id=33`);
+    return ok(out);
+  }
+  if (verb === '-v') return ok(['Server version: Apache/2.4.58 (Ubuntu)', 'Server built:   2026-01-15T00:00:00']);
+  if (verb === 'graceful' || verb === 'reload') {
+    const d = requireRoot(ctx, 'apache2ctl: only root can reload the server');
+    if (d) return d;
+    if (!st.services.apache2?.active) return fail(['apache2ctl: apache2 is not running; start it with sudo systemctl start apache2']);
+    const r = loadApache(st);
+    return r.ok ? ok() : fail([...r.errors.flatMap((e) => e.split('\n')), "Action 'graceful' failed.", 'The Apache error log may have more information.']);
+  }
+  if (['start', 'stop', 'restart'].includes(verb)) return fail([`apache2ctl: use systemd instead: sudo systemctl ${verb} apache2`]);
+  return fail(['Usage: apache2ctl [configtest|graceful|-M|-S|-v]']);
 }
 
 function quoteArg(a: string): string {
