@@ -65,15 +65,25 @@ NetLab works without any backend. To let learners create accounts and keep progr
    ```
 
    It creates the `lab_progress` table (with a `points` column) and its row-level security, so each learner can only read and write their own rows, plus a `profiles` table (public display name, leaderboard opt-out, filled in automatically when an account is created) and the `leaderboard` view, which totals points across learners without exposing anyone's individual rows. The file is safe to re-run after upgrades.
-2. In Authentication > Providers, keep Email enabled. Optionally enable GitHub and add your site URL under Authentication > URL Configuration (add `http://localhost:5173` for local development, and `/account` as an allowed redirect path).
-3. Copy the project URL and the anon (public) key from Project Settings > API into a `.env.local` file (see `.env.example`):
+2. In Authentication > Providers, keep Email enabled, and optionally enable GitHub.
+3. In Authentication > URL Configuration, set **Site URL** to the address learners actually use (`https://your-site.example`) and add these under **Redirect URLs**:
+
+   ```
+   https://your-site.example/account
+   https://your-site.example/account?next=*
+   http://localhost:5173/account
+   http://localhost:5173/account?next=*
+   ```
+
+   Confirmation links come back to `/account`, carrying `?next=` so a learner who was sent to sign in from a lab is returned to it. Supabase silently falls back to the Site URL for any address that is not on this list, which is the usual reason a confirmation link lands somewhere unexpected. A deployment served from an origin you cannot list (a preview build, say) can set `VITE_SITE_URL` to one you can.
+4. Copy the project URL and the anon (public) key from Project Settings > API into a `.env.local` file (see `.env.example`):
 
    ```
    VITE_SUPABASE_URL=https://xxxx.supabase.co
    VITE_SUPABASE_ANON_KEY=eyJ...
    ```
 
-4. Restart `npm run dev`. A "Sign in" button appears in the header and `/account` offers sign-in and account creation.
+5. Restart `npm run dev`. A "Sign in" button appears in the header and `/account` offers sign-in and account creation.
 
 The anon key is safe to ship in the browser bundle: every request runs under the signed-in user's JWT and the row-level security policies decide what it may touch. Terminal sessions (the text of each lab's console) stay on the device; only scores, stars and completion times are stored in the account.
 

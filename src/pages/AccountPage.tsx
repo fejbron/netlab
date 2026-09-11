@@ -6,6 +6,8 @@ import Icon, { NF } from '../components/Icon';
 import { labs } from '../content';
 import { formatPoints, maxTotalPoints, totalPoints } from '../lib/points';
 import { useAuth } from '../lib/auth';
+import { callbackMessage, canResend } from '../lib/authCallback';
+import { authCallback } from '../lib/supabase';
 import { fetchProfile, updateProfile, type Profile } from '../lib/leaderboard';
 import { useProgress } from '../lib/progressStore';
 
@@ -98,8 +100,27 @@ export default function AccountPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(authCallback.kind === 'error' ? callbackMessage(authCallback) : null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [offerResend, setOfferResend] = useState(authCallback.kind === 'error' && canResend(authCallback));
+
+  // Take the one-time tokens and any error out of the address bar, keeping ?next.
+  useEffect(() => {
+    if (authCallback.kind === 'none') return;
+    const url = new URL(window.location.href);
+    url.hash = '';
+    for (const k of ['error', 'error_code', 'error_description', 'code', 'token_hash', 'type']) url.searchParams.delete(k);
+    window.history.replaceState(window.history.state, '', url.toString());
+  }, []);
+
+  // A confirmed link signs the learner in; send them on to whatever they were trying to reach.
+  useEffect(() => {
+    if (authCallback.kind === 'confirmed' && !auth.loading && auth.user && next !== '/') navigate(next, { replace: true });
+  }, [auth.loading, auth.user, navigate, next]);
+
+  // Confirming in a different browser from the one that signed up cannot restore the session there,
+  // but the account itself is now confirmed, so say so rather than showing a bare form.
+  const confirmedElsewhere = authCallback.kind === 'confirmed' && !auth.loading && !auth.user;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -111,10 +132,25 @@ export default function AccountPage() {
         await auth.signIn(email.trim(), password);
         navigate(next);
       } else {
-        const needsConfirm = await auth.signUp(email.trim(), password);
-        if (needsConfirm) setNotice('Account created. Check your inbox for a confirmation link, then sign in.');
+        const needsConfirm = await auth.signUp(email.trim(), password, next);
+        if (needsConfirm) setNotice('Account created. Open the confirmation link in your inbox within the hour, and it will bring you back here signed in.');
         else navigate(next);
       }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resend() {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await auth.resendConfirmation(email.trim(), next);
+      setOfferResend(false);
+      setNotice('A new confirmation link is on its way. Open the newest email within the hour.');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -125,7 +161,7 @@ export default function AccountPage() {
   async function github() {
     setError(null);
     try {
-      await auth.signInWithGitHub();
+      await auth.signInWithGitHub(next);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -161,6 +197,12 @@ export default function AccountPage() {
               Your account
             </p>
             <h1 className="mt-1 truncate font-mono text-lg text-fg-bright">{auth.user.email ?? auth.user.id}</h1>
+            {authCallback.kind === 'confirmed' && (
+              <p className="mt-3 text-sm text-success">
+                <Icon g={NF.check} className="mr-1.5" />
+                Email confirmed. You are signed in.
+              </p>
+            )}
             <dl className="mt-5 grid grid-cols-2 gap-3 text-sm">
               <div className="rounded-xl bg-surface-2 p-3">
                 <dt className="label text-muted">Labs passed</dt>
@@ -222,6 +264,12 @@ export default function AccountPage() {
           </section>
         ) : (
           <section className="card p-6">
+            {confirmedElsewhere && (
+              <p className="mb-4 text-sm leading-6 text-success">
+                <Icon g={NF.check} className="mr-1.5" />
+                Your email is confirmed. Sign in below to continue.
+              </p>
+            )}
             <div className="flex gap-1 rounded-xl bg-surface-2 p-1 text-sm">
               {(['signin', 'signup'] as Tab[]).map((t) => (
                 <button
@@ -232,6 +280,7 @@ export default function AccountPage() {
                     setTab(t);
                     setError(null);
                     setNotice(null);
+                    setOfferResend(false);
                   }}
                 >
                   {t === 'signin' ? 'Sign in' : 'Create account'}
@@ -252,10 +301,18 @@ export default function AccountPage() {
                 <input type="password" required minLength={8} autoComplete={tab === 'signin' ? 'current-password' : 'new-password'} value={password} onChange={(e) => setPassword(e.target.value)} className="input" />
               </label>
               {error && (
-                <p className="text-sm text-danger">
-                  <Icon g={NF.warning} className="mr-1.5" />
-                  {error}
-                </p>
+                <div className="text-sm text-danger">
+                  <p>
+                    <Icon g={NF.warning} className="mr-1.5" />
+                    {error}
+                  </p>
+                  {offerResend && (
+                    <button type="button" onClick={resend} disabled={busy || !email.includes('@')} className="btn btn-ghost btn-sm mt-2">
+                      <Icon g={NF.envelope} />
+                      {email.includes('@') ? 'Send a new link' : 'Enter your email above first'}
+                    </button>
+                  )}
+                </div>
               )}
               {notice && (
                 <p className="text-sm text-success">

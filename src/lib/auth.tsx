@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
-import { accountsEnabled, supabase } from './supabase';
+import { accountsEnabled, authRedirectTo, supabase } from './supabase';
 
 export interface AuthState {
   /** False when no Supabase project is configured: guest mode only. */
@@ -9,9 +9,14 @@ export interface AuthState {
   loading: boolean;
   user: User | null;
   signIn(email: string, password: string): Promise<void>;
-  /** Resolves with true when the account needs email confirmation before it can sign in. */
-  signUp(email: string, password: string): Promise<boolean>;
-  signInWithGitHub(): Promise<void>;
+  /**
+   * Resolves with true when the account needs email confirmation before it can sign in.
+   * `next` is where the learner was headed; the confirmation link returns them there.
+   */
+  signUp(email: string, password: string, next?: string | null): Promise<boolean>;
+  /** Send another confirmation email, for a link that expired before it was opened. */
+  resendConfirmation(email: string, next?: string | null): Promise<void>;
+  signInWithGitHub(next?: string | null): Promise<void>;
   signOut(): Promise<void>;
 }
 
@@ -52,15 +57,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) fail(error.message);
     },
-    async signUp(email, password) {
+    async signUp(email, password, next) {
       if (!supabase) fail('Accounts are not enabled on this site.');
-      const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: `${window.location.origin}/account` } });
+      const { data, error } = await supabase.auth.signUp({ email, password, options: { emailRedirectTo: authRedirectTo(next) } });
       if (error) fail(error.message);
       return data.session === null;
     },
-    async signInWithGitHub() {
+    async resendConfirmation(email, next) {
       if (!supabase) fail('Accounts are not enabled on this site.');
-      const { error } = await supabase.auth.signInWithOAuth({ provider: 'github', options: { redirectTo: `${window.location.origin}/account` } });
+      const { error } = await supabase.auth.resend({ type: 'signup', email, options: { emailRedirectTo: authRedirectTo(next) } });
+      if (error) fail(error.message);
+    },
+    async signInWithGitHub(next) {
+      if (!supabase) fail('Accounts are not enabled on this site.');
+      const { error } = await supabase.auth.signInWithOAuth({ provider: 'github', options: { redirectTo: authRedirectTo(next) } });
       if (error) fail(error.message);
     },
     async signOut() {
