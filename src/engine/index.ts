@@ -19,7 +19,8 @@ export { executeHost, hostPrompt, hostMaskedInput, applyPythonResult } from './h
 export type { HostExecResult, PythonResult } from './host';
 export { splitArgs, curl } from './curl';
 export { createLinuxState, executeLinux, linuxPrompt, runLine, Shell, LINUX_COMMANDS, LINUX_COMMAND_NAMES, normalizePath, getNode, readFile, listDir, modeString, octal } from './linux';
-export type { LinuxState, LinuxSpec, FsNode, LinuxUser, LinuxGroup, LinuxService, PendingPython, CmdResult, LinuxExecResult } from './linux';
+export type { LinuxState, LinuxSpec, FsNode, LinuxUser, LinuxGroup, LinuxService, PendingPython, CmdResult, LinuxExecResult, HttpRequest, HttpResponse, WebRequestRecord } from './linux';
+export { serveHttp, testNginx, loadNginx, makeCertificate, makePrivateKey, parseCertificate, resolveName } from './linux';
 export { restconfRequest, interfaceJson, statusText } from './restconf';
 export type { ApiCall, ApiResponse, ApiMethod } from './restconf';
 export { dhcpSnoopingBindings, dhcpSnoopingDrop } from './network';

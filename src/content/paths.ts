@@ -88,6 +88,9 @@ export const LFCS_TOPICS: Record<string, string> = {
   'NW.2': 'Troubleshoot connectivity with ping, traceroute and DNS tools',
   'NW.3': 'Inspect listening services and ports (ss) and reach them over HTTP',
   'NW.4': 'Consume network device APIs from Linux (curl, RESTCONF, JSON)',
+  'NW.5': 'Configure a web server: virtual hosts, static content and reverse proxying (nginx)',
+  'NW.6': 'Secure a service with TLS certificates and redirect plain HTTP',
+  'NW.7': 'Distribute traffic across backends with a load balancer and handle backend failures',
 };
 
 export const linuxPath: LearningPath = {
@@ -103,12 +106,13 @@ export const linuxPath: LearningPath = {
     'Set permissions and ownership correctly, manage users and groups, and escalate privilege with sudo only when needed.',
     'Install packages, run and enable services with systemd, and read processes and logs to diagnose a server.',
     'Inspect addressing and routing from the host, test reachability, and call a router API with curl.',
+    'Configure nginx as a web server, TLS terminator, reverse proxy and load balancer, and troubleshoot it with nginx -t and curl.',
     'Write Bash scripts with variables, conditions, loops and functions, and build text-processing pipelines.',
     'Run real Python in the browser to read files and JSON, generate configuration, and audit a system.',
   ],
   audience: 'Network and support engineers who need to be comfortable on a Linux server, and learners preparing for LFCS-level work.',
   prerequisites: 'No Linux experience required. Basic IP-address familiarity helps for the networking module.',
-  skillTags: ['Bash', 'Files and permissions', 'systemd', 'Users and sudo', 'Networking', 'Python'],
+  skillTags: ['Bash', 'Files and permissions', 'systemd', 'Users and sudo', 'Networking', 'nginx and TLS', 'Python'],
   blueprint: {
     version: 'LFCS (2024 domains)',
     reviewedAt: '2026-09-11',

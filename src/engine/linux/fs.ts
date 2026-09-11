@@ -41,6 +41,27 @@ export interface LinuxService {
   enabled: boolean;
   /** TCP port it listens on when active (for ss). */
   port?: number;
+  /** All listening ports when a service has several (nginx after loading its configuration). */
+  ports?: number[];
+}
+
+export interface WebRequestRecord {
+  scheme: 'http' | 'https';
+  host: string;
+  path: string;
+  status: number;
+  server?: string;
+  backend?: string;
+}
+
+/** nginx runtime state: the configuration it serves from, round-robin pointers and the request log. */
+export interface WebState {
+  /** Snapshot of the configuration files at the last successful start/reload. */
+  loaded?: string;
+  listens: number[];
+  lastError?: string;
+  rr: Record<string, number>;
+  requests: WebRequestRecord[];
 }
 
 export interface LinuxProcess {
@@ -87,6 +108,7 @@ export interface LinuxState {
   clock: number;
   /** Lines typed at the shell (for `history`). */
   history: string[];
+  web: WebState;
 }
 
 export interface LinuxFileSpec {
@@ -135,6 +157,7 @@ export const KNOWN_SERVICES: Record<string, { description: string; port?: number
   chrony: { description: 'chrony, an NTP client/server', port: 123, package: 'chrony' },
   docker: { description: 'Docker Application Container Engine', package: 'docker.io' },
   ufw: { description: 'Uncomplicated firewall', package: 'ufw' },
+  app: { description: 'NetLab demo application server', port: 8080, package: 'netlab-app' },
 };
 
 /** Packages apt knows about and the service each one provides. */
@@ -145,6 +168,8 @@ export const KNOWN_PACKAGES: Record<string, { service?: string; description: str
   chrony: { service: 'chrony', description: 'Versatile implementation of the Network Time Protocol' },
   ufw: { service: 'ufw', description: 'program for managing a Netfilter firewall' },
   'docker.io': { service: 'docker', description: 'Linux container runtime' },
+  'netlab-app': { service: 'app', description: 'NetLab demo application server (answers with its hostname on port 8080)' },
+  openssl: { description: 'Secure Sockets Layer toolkit - cryptographic utility' },
   python3: { description: 'interactive high-level object-oriented language (default python3 version)' },
   'python3-pip': { description: 'Python package installer' },
   curl: { description: 'command line tool for transferring data with URL syntax' },
@@ -496,6 +521,7 @@ export function createLinuxState(spec: LinuxSpec, hostName: string): LinuxState 
     pythonRuns: [],
     clock: 100,
     history: [],
+    web: { listens: [], rr: {}, requests: [] },
   };
   let uid = 1000;
   const addUser = (u: LinuxUserSpec) => {
@@ -524,12 +550,9 @@ export function createLinuxState(spec: LinuxSpec, hostName: string): LinuxState 
     if (known?.package && !state.packages.includes(known.package)) state.packages.push(known.package);
     if (state.services[name].active) state.processes.push({ pid: state.nextPid++, user: name === 'nginx' || name === 'apache2' ? 'www-data' : 'root', cmd: daemonCommand(name) });
   }
-  if (state.packages.includes('nginx') && !state.fs['/var/www/html']) {
-    state.fs['/var/www/html'] = { type: 'dir', content: '', owner: 'root', group: 'root', mode: 0o755, mtime: 0 };
-    state.fs['/var/www/html/index.nginx-debian.html'] = { type: 'file', content: '<!DOCTYPE html>\n<html>\n<head><title>Welcome to nginx!</title></head>\n<body><h1>Welcome to nginx!</h1></body>\n</html>\n', owner: 'root', group: 'root', mode: 0o644, mtime: 0 };
-    state.fs['/etc/nginx'] = { type: 'dir', content: '', owner: 'root', group: 'root', mode: 0o755, mtime: 0 };
-    state.fs['/etc/nginx/nginx.conf'] = { type: 'file', content: 'user www-data;\nworker_processes auto;\n\nevents {\n    worker_connections 768;\n}\n\nhttp {\n    include /etc/nginx/sites-enabled/*;\n}\n', owner: 'root', group: 'root', mode: 0o644, mtime: 0 };
-  }
+  if (state.packages.includes('nginx')) installNginxFiles(state);
+  if (state.packages.includes('netlab-app')) installAppFiles(state);
+  installSslDirs(state);
   for (const [rawPath, value] of Object.entries(spec.files ?? {})) {
     const path = normalizePath('/', rawPath, homeOf(state));
     const f = typeof value === 'string' ? { content: value } : value;
@@ -548,6 +571,92 @@ export function createLinuxState(spec: LinuxSpec, hostName: string): LinuxState 
   return state;
 }
 
+const NGINX_CONF = `user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+error_log /var/log/nginx/error.log;
+include /etc/nginx/modules-enabled/*.conf;
+
+events {
+    worker_connections 768;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    types_hash_max_size 2048;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+
+    access_log /var/log/nginx/access.log;
+
+    gzip on;
+
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
+}
+`;
+
+const NGINX_DEFAULT_SITE = `##
+# Default server configuration
+##
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    root /var/www/html;
+
+    # Add index.php to the list if you are using PHP
+    index index.html index.htm index.nginx-debian.html;
+
+    server_name _;
+
+    location / {
+        # First attempt to serve request as file, then
+        # as directory, then fall back to displaying a 404.
+        try_files $uri $uri/ =404;
+    }
+}
+`;
+
+/** Files the nginx package ships with (Debian/Ubuntu layout). Idempotent. */
+export function installNginxFiles(state: LinuxState): void {
+  const d = (p: string, mode = 0o755) => (state.fs[p] ??= { type: 'dir', content: '', owner: 'root', group: 'root', mode, mtime: 0 });
+  const f = (p: string, content: string, mode = 0o644) => (state.fs[p] ??= { type: 'file', content, owner: 'root', group: 'root', mode, mtime: 0 });
+  d('/var/www/html');
+  f('/var/www/html/index.nginx-debian.html', '<!DOCTYPE html>\n<html>\n<head>\n<title>Welcome to nginx!</title>\n</head>\n<body>\n<h1>Welcome to nginx!</h1>\n<p>If you see this page, the nginx web server is successfully installed and\nworking. Further configuration is required.</p>\n</body>\n</html>\n');
+  d('/etc/nginx');
+  d('/etc/nginx/conf.d');
+  d('/etc/nginx/sites-available');
+  d('/etc/nginx/sites-enabled');
+  d('/etc/nginx/snippets');
+  d('/etc/nginx/modules-enabled');
+  f('/etc/nginx/nginx.conf', NGINX_CONF);
+  f('/etc/nginx/mime.types', 'types {\n    text/html                             html htm shtml;\n    text/css                              css;\n    application/javascript                js;\n    application/json                      json;\n    text/plain                            txt;\n}\n');
+  f('/etc/nginx/sites-available/default', NGINX_DEFAULT_SITE);
+  state.fs['/etc/nginx/sites-enabled/default'] ??= { type: 'link', content: '', target: '/etc/nginx/sites-available/default', owner: 'root', group: 'root', mode: 0o777, mtime: 0 };
+  d('/var/log/nginx');
+  f('/var/log/nginx/access.log', '');
+  f('/var/log/nginx/error.log', '');
+}
+
+/** The demo application: a tiny server on 8080 that answers with the hostname. */
+export function installAppFiles(state: LinuxState): void {
+  state.fs['/opt/app'] ??= { type: 'dir', content: '', owner: 'root', group: 'root', mode: 0o755, mtime: 0 };
+  state.fs['/opt/app/server.py'] ??= { type: 'file', content: '#!/usr/bin/env python3\n"""NetLab demo app: answers every request with this host\'s name (or /opt/app/index.html if present)."""\nimport socket, http.server\n\nclass H(http.server.BaseHTTPRequestHandler):\n    def do_GET(self):\n        body = f"Hello from {socket.gethostname()}\\n".encode()\n        self.send_response(200)\n        self.send_header("Content-Type", "text/plain")\n        self.end_headers()\n        self.wfile.write(body)\n\nhttp.server.HTTPServer(("0.0.0.0", 8080), H).serve_forever()\n', owner: 'root', group: 'root', mode: 0o755, mtime: 0 };
+}
+
+export function installSslDirs(state: LinuxState): void {
+  state.fs['/etc/ssl'] ??= { type: 'dir', content: '', owner: 'root', group: 'root', mode: 0o755, mtime: 0 };
+  state.fs['/etc/ssl/certs'] ??= { type: 'dir', content: '', owner: 'root', group: 'root', mode: 0o755, mtime: 0 };
+  state.fs['/etc/ssl/private'] ??= { type: 'dir', content: '', owner: 'root', group: 'root', mode: 0o700, mtime: 0 };
+  state.fs['/etc/ssl/openssl.cnf'] ??= { type: 'file', content: '# OpenSSL default configuration (abridged)\n[ req ]\ndefault_bits = 2048\ndistinguished_name = req_distinguished_name\n[ req_distinguished_name ]\ncountryName = Country Name (2 letter code)\ncommonName = Common Name (e.g. server FQDN or YOUR name)\n', owner: 'root', group: 'root', mode: 0o644, mtime: 0 };
+}
+
 export function daemonCommand(service: string): string {
   switch (service) {
     case 'nginx':
@@ -560,6 +669,8 @@ export function daemonCommand(service: string): string {
       return '/usr/sbin/chronyd -F 1';
     case 'docker':
       return '/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock';
+    case 'app':
+      return '/usr/bin/python3 /opt/app/server.py --port 8080';
     default:
       return `/usr/sbin/${service}`;
   }

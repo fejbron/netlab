@@ -19,6 +19,7 @@ import { linuxShellLabs } from './labs/linux-shell';
 import { linuxAdminLabs } from './labs/linux-admin';
 import { linuxScriptingLabs } from './labs/linux-scripting';
 import { linuxPythonLabs } from './labs/linux-python';
+import { linuxWebLabs } from './labs/linux-web';
 import { paths } from './paths';
 
 export type { Lab, Module, Difficulty } from './types';
@@ -68,7 +69,8 @@ export const modules: Module[] = [
   { id: 'linux-shell', pathId: 'linux', order: 1, title: 'Meet the Shell', description: 'Find your way around a Linux server: files, directories, permissions, links, and the tools that read and search text.', examTopics: ['EC.1', 'EC.2', 'EC.3', 'EC.4', 'EC.5', 'EC.6', 'EC.7'] },
   { id: 'linux-admin', pathId: 'linux', order: 2, title: 'Administer the Server', description: 'Become root safely, manage users and groups, install and run services, read processes and logs, and check the network from the host.', examTopics: ['UG.1', 'UG.2', 'OD.1', 'OD.2', 'OD.3', 'NW.1', 'NW.2', 'NW.3', 'NW.4'] },
   { id: 'linux-scripting', pathId: 'linux', order: 3, title: 'Shell Scripting', description: 'Automate with Bash: variables, scripts, conditions, loops, functions, exit codes and text-processing pipelines.', examTopics: ['OD.4', 'EC.5', 'EC.6', 'EC.7'] },
-  { id: 'linux-python', pathId: 'linux', order: 4, title: 'Python on Linux', description: 'Run real Python in your browser: read files and JSON, generate device configuration, and audit the system.', examTopics: ['OD.5', 'NW.4'] },
+  { id: 'linux-web', pathId: 'linux', order: 4, title: 'Web Servers, TLS and Load Balancing', description: 'Configure nginx: virtual hosts, self-signed TLS with HTTP-to-HTTPS redirects, a reverse proxy, and an upstream that balances two application servers and survives a backend failure.', examTopics: ['NW.3', 'NW.5', 'NW.6', 'NW.7', 'OD.1'] },
+  { id: 'linux-python', pathId: 'linux', order: 5, title: 'Python on Linux', description: 'Run real Python in your browser: read files and JSON, generate device configuration, and audit the system.', examTopics: ['OD.5', 'NW.4'] },
 ];
 
 const pathOrder = (pathId: string) => paths.findIndex((p) => p.id === pathId);
@@ -92,6 +94,7 @@ export const labs: Lab[] = [
   ...linuxShellLabs,
   ...linuxAdminLabs,
   ...linuxScriptingLabs,
+  ...linuxWebLabs,
   ...linuxPythonLabs,
 ].sort((a, b) => {
   const ma = modules.find((m) => m.id === a.moduleId);

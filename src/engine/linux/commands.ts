@@ -36,6 +36,8 @@ import {
   type LinuxState,
 } from './fs';
 import { fail, ok, type CmdCtx, type CmdResult, type Command } from './shell';
+import { loadNginx, makeCertificate, makePrivateKey, nginxPorts, opensslDate, parseCertificate, testNginx } from './web';
+import { installAppFiles, installNginxFiles } from './fs';
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -369,8 +371,9 @@ export const COMMANDS: Record<string, Command> = {
       const p = parseArgs(ctx.args);
       if (p.operands.length < 2) return fail(['ln: missing file operand'], 1);
       const [target, linkName] = p.operands;
-      const path = ctx.sh.path(linkName);
       const st = ctx.state;
+      let path = ctx.sh.path(linkName);
+      if (getNode(st, path)?.type === 'dir') path = normalizePath(path, baseName(target));
       if (st.fs[path]) return fail([`ln: failed to create symbolic link '${linkName}': File exists`]);
       const parent = getNode(st, parentPath(path));
       if (!parent || !canWrite(st, parent)) return fail([`ln: failed to create symbolic link '${linkName}': Permission denied`]);
@@ -630,7 +633,7 @@ export const COMMANDS: Record<string, Command> = {
       if (script === undefined) return fail(['Usage: sed [OPTION]... {script-only-if-no-other-script} [input-file]...'], 1);
       const { perFile, errors } = readInputs(ctx, p.operands, 'sed');
       const quiet = p.flags.has('n');
-      const ops = script.split(/;(?![^[]*\])/).map((s) => s.trim()).filter(Boolean);
+      const ops = splitSedScript(script);
       const transform = (input: string[]): string[] | string => {
         let out: string[] = [];
         const printed: string[] = [];
@@ -1212,6 +1215,7 @@ export const COMMANDS: Record<string, Command> = {
             out.push(`${svc.active ? '●' : '○'} ${name}.service - ${svc.description}`, `     Loaded: loaded (/usr/lib/systemd/system/${name}.service; ${svc.enabled ? 'enabled' : 'disabled'}; preset: enabled)`, `     Active: ${svc.active ? 'active (running)' : 'inactive (dead)'}${svc.active ? ` since ${since}` : ''}`);
             if (svc.active && proc) out.push(`   Main PID: ${proc.pid} (${baseName(proc.cmd.split(' ')[0]).replace(/:$/, '')})`, '      Tasks: 2 (limit: 4556)', '     Memory: 3.1M (peak: 4.0M)', '        CPU: 42ms', `     CGroup: /system.slice/${name}.service`, `             └─${proc.pid} ${proc.cmd}`);
             if (svc.active) out.push('', `Sep 11 08:55:12 ${st.hostname} systemd[1]: Started ${svc.description}.`);
+            else if (name === 'nginx' && st.web.lastError) out.push('', `Sep 11 09:10:02 ${st.hostname} nginx[${st.nextPid}]: ${st.web.lastError}`, `Sep 11 09:10:02 ${st.hostname} nginx[${st.nextPid}]: nginx: configuration file /etc/nginx/nginx.conf test failed`, `Sep 11 09:10:02 ${st.hostname} systemd[1]: nginx.service: Control process exited, code=exited, status=1/FAILURE`, `Sep 11 09:10:02 ${st.hostname} systemd[1]: Failed to start ${svc.description}.`);
             else out.push('', `Sep 11 08:55:12 ${st.hostname} systemd[1]: Stopped ${svc.description}.`);
             if (units.length > 1) out.push('');
             break;
@@ -1235,6 +1239,17 @@ export const COMMANDS: Record<string, Command> = {
               break;
             }
             if (verb === 'start' || verb === 'restart' || verb === 'reload') {
+              if (name === 'nginx') {
+                const r = loadNginx(st);
+                if (!r.ok) {
+                  err.push(`Job for nginx.service failed because the control process exited with error code.`, `See "systemctl status nginx.service" and "journalctl -xeu nginx.service" for details.`);
+                  if (verb !== 'reload') {
+                    svc.active = false;
+                    st.processes = st.processes.filter((x) => x.cmd !== daemonCommand(name));
+                  }
+                  break;
+                }
+              }
               if (!svc.active) {
                 svc.active = true;
                 st.processes.push({ pid: st.nextPid++, user: name === 'nginx' || name === 'apache2' ? 'www-data' : 'root', cmd: daemonCommand(name) });
@@ -1248,6 +1263,10 @@ export const COMMANDS: Record<string, Command> = {
               svc.enabled = true;
               out.push(`Created symlink /etc/systemd/system/multi-user.target.wants/${name}.service → /usr/lib/systemd/system/${name}.service.`);
               if (p.flags.has('now') && !svc.active) {
+                if (name === 'nginx' && !loadNginx(st).ok) {
+                  err.push(`Job for nginx.service failed because the control process exited with error code.`, `See "systemctl status nginx.service" and "journalctl -xeu nginx.service" for details.`);
+                  break;
+                }
                 svc.active = true;
                 st.processes.push({ pid: st.nextPid++, user: name === 'nginx' || name === 'apache2' ? 'www-data' : 'root', cmd: daemonCommand(name) });
               }
@@ -1494,12 +1513,11 @@ export const COMMANDS: Record<string, Command> = {
             if (known.service) {
               const ks = KNOWN_SERVICES[known.service];
               st.services[known.service] = { name: known.service, description: ks.description, active: false, enabled: false, port: ks.port };
-              if (known.service === 'nginx' || known.service === 'apache2') {
+              if (known.service === 'nginx') installNginxFiles(st);
+              if (known.service === 'app') installAppFiles(st);
+              if (known.service === 'apache2') {
                 st.fs['/var/www/html'] ??= { type: 'dir', content: '', owner: 'root', group: 'root', mode: 0o755, mtime: ++st.clock };
-                const idx = known.service === 'nginx' ? '/var/www/html/index.nginx-debian.html' : '/var/www/html/index.html';
-                st.fs[idx] ??= { type: 'file', content: `<!DOCTYPE html>\n<html>\n<head><title>Welcome to ${known.service}!</title></head>\n<body><h1>Welcome to ${known.service}!</h1></body>\n</html>\n`, owner: 'root', group: 'root', mode: 0o644, mtime: st.clock };
-                st.fs['/etc/' + known.service] ??= { type: 'dir', content: '', owner: 'root', group: 'root', mode: 0o755, mtime: st.clock };
-                if (known.service === 'nginx') st.fs['/etc/nginx/nginx.conf'] ??= { type: 'file', content: 'user www-data;\nworker_processes auto;\n\nevents {\n    worker_connections 768;\n}\n\nhttp {\n    include /etc/nginx/sites-enabled/*;\n}\n', owner: 'root', group: 'root', mode: 0o644, mtime: st.clock };
+                st.fs['/var/www/html/index.html'] ??= { type: 'file', content: '<!DOCTYPE html>\n<html>\n<head><title>Apache2 Ubuntu Default Page</title></head>\n<body><h1>It works!</h1></body>\n</html>\n', owner: 'root', group: 'root', mode: 0o644, mtime: st.clock };
               }
               out.push(`Created symlink /etc/systemd/system/multi-user.target.wants/${known.service}.service → /usr/lib/systemd/system/${known.service}.service.`);
               st.services[known.service].enabled = true;
@@ -1597,13 +1615,14 @@ export const COMMANDS: Record<string, Command> = {
   ss: {
     help: 'investigate sockets',
     run: (ctx) => {
-      const listening = Object.values(ctx.state.services).filter((s) => s.active && s.port);
+      const listening = Object.values(ctx.state.services).filter((s) => s.active && (s.port || s.ports?.length));
       const showProc = ctx.args.some((a) => a.includes('p'));
       const out = [`Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:Port ${showProc ? 'Process' : ''}`.trimEnd()];
       for (const s of listening) {
         const proc = ctx.state.processes.find((x) => x.cmd === daemonCommand(s.name));
         const pname = baseName(proc?.cmd.split(' ')[0] ?? s.name).replace(/:$/, '');
-        out.push(`tcp   LISTEN 0      ${s.port === 22 ? 128 : 511}    ${`0.0.0.0:${s.port}`.padEnd(19)}${'0.0.0.0:*'.padEnd(18)}${showProc ? (isRoot(ctx.state) ? `users:(("${pname}",pid=${proc?.pid ?? 0},fd=6))` : '') : ''}`.trimEnd());
+        const ports = s.name === 'nginx' ? nginxPorts(ctx.state) : (s.ports ?? [s.port!]);
+        for (const port of ports) out.push(`tcp   LISTEN 0      ${port === 22 ? 128 : 511}    ${`0.0.0.0:${port}`.padEnd(19)}${'0.0.0.0:*'.padEnd(18)}${showProc ? (isRoot(ctx.state) ? `users:(("${pname}",pid=${proc?.pid ?? 0},fd=6))` : '') : ''}`.trimEnd());
       }
       return ok(out);
     },
@@ -1702,6 +1721,113 @@ export const COMMANDS: Record<string, Command> = {
     },
   },
 
+  nginx: {
+    help: 'HTTP and reverse proxy server (nginx -t tests the configuration, -s reload reloads it)',
+    run: (ctx) => {
+      if (!ctx.state.packages.includes('nginx')) return fail(["Command 'nginx' not found, but can be installed with:", 'sudo apt install nginx'], 127);
+      const a = ctx.args;
+      if (a[0] === '-v' || a[0] === '-V') return fail(['nginx version: nginx/1.24.0 (Ubuntu)'], 0);
+      if (a[0] === '-t' || a[0] === '-T') {
+        const r = testNginx(ctx.state);
+        if (a[0] === '-T' && r.ok) return ok([...r.warnings, ...(ctx.state.fs['/etc/nginx/nginx.conf']?.content ?? '').split('\n')]);
+        if (r.ok) return fail([...r.warnings, 'nginx: the configuration file /etc/nginx/nginx.conf syntax is ok', 'nginx: configuration file /etc/nginx/nginx.conf test is successful'], 0);
+        return fail([...r.warnings, ...r.errors, 'nginx: configuration file /etc/nginx/nginx.conf test failed'], 1);
+      }
+      if (a[0] === '-s') {
+        const d = requireRoot(ctx, `nginx: [alert] could not open error log file: open() "/var/log/nginx/error.log" failed (13: Permission denied)`);
+        if (d) return fail([...d.err, 'nginx: [error] open() "/run/nginx.pid" failed (13: Permission denied)']);
+        if (!ctx.state.services.nginx?.active) return fail(['nginx: [error] open() "/run/nginx.pid" failed (2: No such file or directory)']);
+        if (a[1] === 'reload') {
+          const r = loadNginx(ctx.state);
+          return r.ok ? ok() : fail(r.errors);
+        }
+        if (a[1] === 'stop' || a[1] === 'quit') {
+          ctx.state.services.nginx.active = false;
+          ctx.state.processes = ctx.state.processes.filter((x) => x.cmd !== daemonCommand('nginx'));
+          return ok();
+        }
+        return fail([`nginx: invalid option: "-s ${a[1] ?? ''}"`]);
+      }
+      return fail(['nginx: this simulator runs nginx through systemd; use sudo systemctl start nginx, nginx -t or sudo nginx -s reload.']);
+    },
+  },
+  openssl: {
+    help: 'OpenSSL command line tool (req -x509 creates a self-signed certificate; x509 inspects one)',
+    run: (ctx) => {
+      const [sub, ...rest] = ctx.args;
+      const opt = (name: string) => {
+        const i = rest.indexOf(name);
+        return i === -1 ? undefined : rest[i + 1];
+      };
+      const has = (name: string) => rest.includes(name);
+      if (sub === 'version') return ok(['OpenSSL 3.0.13 30 Jan 2024 (Library: OpenSSL 3.0.13 30 Jan 2024)']);
+      if (sub === 'req') {
+        if (!has('-x509')) return fail(['openssl req: this simulator only creates self-signed certificates; add -x509 (certificate signing requests need a CA, which the lab network does not have).']);
+        const out = opt('-out');
+        const keyout = opt('-keyout');
+        const existingKey = opt('-key');
+        const subj = opt('-subj');
+        const days = Number(opt('-days') ?? 30);
+        if (!out) return fail(['openssl req: -out <file> is required (this simulator does not print certificates to the terminal)']);
+        if (!keyout && !existingKey) return fail(['openssl req: give -newkey rsa:2048 -keyout <file> to create a key, or -key <file> to reuse one']);
+        if (!subj) return fail(['You are about to be asked to enter information that will be incorporated', 'into your certificate request.', '(This simulator cannot prompt; pass the subject on the command line, e.g. -subj "/CN=web1.lab.local")'], 1);
+        if (!/\/CN=[^/]+/.test(subj)) return fail(['openssl req: the subject needs a common name, e.g. -subj "/CN=web1.lab.local"']);
+        if (!has('-nodes') && !has('-noenc') && keyout) return fail(['Enter PEM pass phrase:', '(This simulator cannot prompt for a pass phrase; add -nodes to write an unencrypted key, which nginx needs anyway.)'], 1);
+        const errs: string[] = [];
+        if (keyout) {
+          const e = writeFile(ctx.state, ctx.sh.path(keyout), makePrivateKey(subj), false, 'openssl', keyout);
+          if (e) errs.push(e.error);
+          else {
+            const node = getNode(ctx.state, ctx.sh.path(keyout));
+            if (node) node.mode = 0o600;
+          }
+        } else if (existingKey) {
+          const k = readFile(ctx.state, ctx.sh.path(existingKey), 'openssl', existingKey);
+          if ('error' in k) return fail([`Could not read private key from ${existingKey}`, k.error]);
+        }
+        const e2 = writeFile(ctx.state, ctx.sh.path(out), makeCertificate(subj, days), false, 'openssl', out);
+        if (e2) errs.push(e2.error);
+        if (errs.length) return fail(errs);
+        return fail(keyout ? ['..+.+.....+......+..+.......+++++++++++++++++++++++++++++++++++++++*', '.......+..+.+..+...+.......+...+.....+.+.....+....+..+.........+*', '-----'] : ['-----'], 0);
+      }
+      if (sub === 'x509') {
+        const file = opt('-in');
+        if (!file) return fail(['openssl x509: -in <certificate> is required']);
+        const r = readFile(ctx.state, ctx.sh.path(file), 'openssl', file);
+        if ('error' in r) return fail([`Could not open file or uri for loading certificate from ${file}`, r.error]);
+        const cert = parseCertificate(r.content);
+        if (!cert) return fail(['Could not read certificate from ' + file, 'Unable to load certificate']);
+        const out: string[] = [];
+        if (has('-text')) out.push('Certificate:', '    Data:', '        Version: 3 (0x2)', `        Serial Number:`, `            ${cert.serial.match(/.{2}/g)!.join(':')}`, '        Signature Algorithm: sha256WithRSAEncryption', `        Issuer: ${cert.issuer.replace(/^\//, '').replace(/\//g, ', ')}`, '        Validity', `            Not Before: ${opensslDate(cert.notBefore)}`, `            Not After : ${opensslDate(cert.notAfter)}`, `        Subject: ${cert.subject.replace(/^\//, '').replace(/\//g, ', ')}`, '        Subject Public Key Info:', '            Public Key Algorithm: rsaEncryption', '                Public-Key: (2048 bit)', '        X509v3 extensions:', '            X509v3 Basic Constraints: critical', '                CA:TRUE');
+        if (has('-subject')) out.push(`subject=${cert.subject.replace(/^\//, '').replace(/\//g, ', ')}`);
+        if (has('-issuer')) out.push(`issuer=${cert.issuer.replace(/^\//, '').replace(/\//g, ', ')}`);
+        if (has('-dates') || has('-startdate')) out.push(`notBefore=${opensslDate(cert.notBefore)}`);
+        if (has('-dates') || has('-enddate')) out.push(`notAfter=${opensslDate(cert.notAfter)}`);
+        if (has('-serial')) out.push(`serial=${cert.serial.toUpperCase()}`);
+        if (has('-fingerprint')) out.push(`sha256 Fingerprint=${cert.serial.toUpperCase().match(/.{2}/g)!.join(':')}`);
+        if (!has('-noout')) out.push(...r.content.replace(/\n$/, '').split('\n'));
+        if (!out.length) out.push(...r.content.replace(/\n$/, '').split('\n'));
+        return ok(out);
+      }
+      if (sub === 'genrsa') {
+        const out = opt('-out');
+        if (!out) return fail(['openssl genrsa: -out <file> is required in this simulator']);
+        const e = writeFile(ctx.state, ctx.sh.path(out), makePrivateKey(out), false, 'openssl', out);
+        if (e) return fail([e.error]);
+        const node = getNode(ctx.state, ctx.sh.path(out));
+        if (node) node.mode = 0o600;
+        return ok();
+      }
+      if (sub === 'rsa') {
+        const file = opt('-in');
+        const r = file ? readFile(ctx.state, ctx.sh.path(file), 'openssl', file) : { error: 'openssl rsa: -in <key> is required' };
+        if ('error' in r) return fail([r.error]);
+        return r.content.includes('PRIVATE KEY') ? ok(has('-check') ? ['RSA key ok', 'writing RSA key', ...r.content.replace(/\n$/, '').split('\n')] : (has('-noout') ? [] : r.content.replace(/\n$/, '').split('\n'))) : fail(['Could not read private key from ' + file]);
+      }
+      if (sub === 's_client') return fail(['openssl s_client: interactive TLS sessions are not simulated; use curl -k -v https://... to test a TLS listener.']);
+      return fail([`Invalid command '${sub ?? ''}'; type "help" for a list.`]);
+    },
+  },
   python3: {
     help: 'an interpreted, interactive, object-oriented programming language',
     run: (ctx) => {
@@ -1744,6 +1870,36 @@ export const COMMANDS: Record<string, Command> = {
   pip: { help: 'Python package installer', run: (ctx) => (ctx.args[0] === 'install' ? ok([`Requirement already satisfied: ${ctx.args.slice(1).join(' ')} (the simulator ships the standard library only)`]) : ok(['pip 24.0 from /usr/lib/python3/dist-packages/pip (python 3.12)'])) },
   pip3: { help: 'Python package installer', run: (ctx) => COMMANDS.pip.run(ctx) },
 };
+
+/**
+ * Split a sed script into commands. A ";" only separates commands outside a
+ * substitution, so "s#a#b;#" stays one command.
+ */
+export function splitSedScript(script: string): string[] {
+  const ops: string[] = [];
+  let i = 0;
+  while (i < script.length) {
+    while (i < script.length && /[\s;]/.test(script[i])) i++;
+    if (i >= script.length) break;
+    const start = i;
+    const addr = script.slice(i).match(/^(\d+,\d+|\d+|\$|\/(?:[^/\\]|\\.)*\/)/);
+    if (addr) i += addr[0].length;
+    if (script[i] === 's' || script[i] === 'y') {
+      const delim = script[i + 1];
+      i += 2;
+      let seen = 0;
+      while (i < script.length && seen < 2) {
+        if (script[i] === '\\') i++;
+        else if (script[i] === delim) seen++;
+        i++;
+      }
+      while (i < script.length && /[gIip0-9]/.test(script[i])) i++;
+    } else while (i < script.length && script[i] !== ';') i++;
+    const op = script.slice(start, i).trim();
+    if (op) ops.push(op);
+  }
+  return ops;
+}
 
 function quoteArg(a: string): string {
   return /^[A-Za-z0-9_./=:@%+-]+$/.test(a) ? a : `'${a.replace(/'/g, `'\\''`)}'`;

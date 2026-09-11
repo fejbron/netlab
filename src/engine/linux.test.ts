@@ -104,7 +104,7 @@ describe('Linux shell basics', () => {
     expect(out(net, 'echo -e "b\\na\\nb" | sort | uniq -c')).toEqual(['      1 a', '      2 b']);
     expect(out(net, 'echo hello | tr a-z A-Z')).toEqual(['HELLO']);
     expect(out(net, 'grep -n beta notes.txt')).toEqual(['2:beta']);
-    expect(out(net, 'find / -name "*.log" -type f')).toEqual(['/var/log/app.log', '/var/log/auth.log']);
+    expect(out(net, 'find / -name "*.log" -type f')).toEqual(['/var/log/app.log', '/var/log/auth.log', '/var/log/nginx/access.log', '/var/log/nginx/error.log']);
     expect(out(net, 'grep -c "Failed password" /var/log/auth.log')).toEqual(['4']);
     expect(out(net, "awk '/Failed password/ {print $(NF-3)}' /var/log/auth.log | sort | uniq -c | sort -rn | head -1")).toEqual(['      3 203.0.113.45']);
   });

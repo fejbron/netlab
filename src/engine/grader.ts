@@ -3,6 +3,7 @@ import { isIpv6, normalizeIpv6, parsePrefix6 } from './ipv6';
 import { renderConfigBody } from './ios/show';
 import { channelStatus, ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, stpRoot, stpVlan, type ChannelProtocol, type HostState, type NetworkState, type RouteEntry } from './network';
 import { getNode, normalizePath, octal } from './linux/fs';
+import { testNginx } from './linux/web';
 import type { AclAddr, AclEntry, AclProtocol, ApiRequest, CliErrorKind, DeviceState, LineState, Mode, PortMode, SnmpMode, SyslogLevel } from './types';
 
 interface Base {
@@ -120,9 +121,13 @@ export type Check = Base &
     /** python3 ran (a given file, or any) and exited with `exitCode` (default 0); `pattern` is a regex over its stdout. */
     | { type: 'python-run'; file?: string; exitCode?: number; pattern?: string }
     | { type: 'process'; pattern: string; running?: boolean }
+    /** nginx (or the demo app) on a Linux host answered a request; host/path are regexes, backend is a host id. */
+    | { type: 'web-request'; scheme?: 'http' | 'https'; host?: string; path?: string; status?: number; backend?: string; server?: string }
+    /** The nginx configuration on disk passes nginx -t (or fails, with valid: false). */
+    | { type: 'nginx-config'; valid: boolean }
   );
 
-const LINUX_CHECKS = new Set(['file', 'linux-user', 'linux-group', 'service', 'package', 'linux-hostname', 'shell-output', 'python-run', 'process']);
+const LINUX_CHECKS = new Set(['file', 'linux-user', 'linux-group', 'service', 'package', 'linux-hostname', 'shell-output', 'python-run', 'process', 'web-request', 'nginx-config']);
 
 export interface Objective {
   id: string;
@@ -272,7 +277,7 @@ function describe(check: Check): string {
     case 'management-api':
       return [check.restconf ? 'RESTCONF' : '', check.netconf ? 'NETCONF' : '', check.httpsServer ? 'HTTPS server' : '', check.httpAuthLocal ? 'local HTTP authentication' : ''].filter(Boolean).join(', ') + ` enabled${on}`;
     case 'api-request':
-      return `Answered a${check.method ? ` ${check.method}` : 'n API'} request${check.path ? ` for ${check.path.replace(/[\\^$]/g, '')}` : ''}${check.status ? ` with ${check.status}` : ''}${on}`;
+      return `Answered a${check.method ? ` ${check.method}` : 'n API'} request${check.path ? ` for ${readable(check.path)}` : ''}${check.status ? ` with ${check.status}` : ''}${on}`;
     case 'syslog':
       return `Syslog${check.host ? ` to ${check.host}` : ''}${check.trap ? ` at level ${check.trap}` : ''}${on}`;
     case 'snmp-community':
@@ -282,7 +287,7 @@ function describe(check: Check): string {
     case 'file': {
       if (check.exists === false) return `${check.path} does not exist${on}`;
       const what = check.kind === 'dir' ? 'Directory' : check.kind === 'link' ? 'Symlink' : 'File';
-      const bits = [check.contains ? `contains ${check.contains.replace(/[\\^$]/g, '')}` : '', check.notContains ? `no longer contains ${check.notContains.replace(/[\\^$]/g, '')}` : '', check.mode ? `mode ${check.mode}` : '', check.owner ? `owned by ${check.owner}` : '', check.group ? `group ${check.group}` : '', check.target ? `pointing at ${check.target}` : '', check.executable ? 'executable' : ''].filter(Boolean);
+      const bits = [check.contains ? `contains ${readable(check.contains)}` : '', check.notContains ? `no longer contains ${readable(check.notContains)}` : '', check.mode ? `mode ${check.mode}` : '', check.owner ? `owned by ${check.owner}` : '', check.group ? `group ${check.group}` : '', check.target ? `pointing at ${check.target}` : '', check.executable ? 'executable' : ''].filter(Boolean);
       return `${what} ${check.path}${bits.length ? ` ${bits.join(', ')}` : ' exists'}${on}`;
     }
     case 'linux-user': {
@@ -299,11 +304,15 @@ function describe(check: Check): string {
     case 'linux-hostname':
       return `Hostname is ${check.equals}${on}`;
     case 'shell-output':
-      return `Output matching ${check.pattern.replace(/[\\^$]/g, '')} appeared${on}`;
+      return `Output matching ${readable(check.pattern)} appeared${on}`;
     case 'python-run':
-      return `python3${check.file ? ` ${check.file}` : ''} ran${check.exitCode ? ` and exited ${check.exitCode}` : ' successfully'}${check.pattern ? ` printing ${check.pattern.replace(/[\\^$]/g, '')}` : ''}${on}`;
+      return `python3${check.file ? ` ${check.file}` : ''} ran${check.exitCode ? ` and exited ${check.exitCode}` : ' successfully'}${check.pattern ? ` printing ${readable(check.pattern)}` : ''}${on}`;
     case 'process':
       return `${check.running === false ? 'No process' : 'A process'} matching ${check.pattern}${on}`;
+    case 'web-request':
+      return `Served ${check.scheme ? check.scheme.toUpperCase() + ' ' : ''}${check.host ? 'Host ' + readable(check.host) + ' ' : ''}${check.path ? readable(check.path) + ' ' : ''}${check.status ? 'with ' + check.status + ' ' : ''}${check.backend ? 'from backend ' + check.backend : ''}`.trim() + on;
+    case 'nginx-config':
+      return `nginx configuration ${check.valid ? 'passes' : 'fails'} nginx -t${on}`;
   }
 }
 
@@ -368,6 +377,13 @@ function evaluateLinuxCheck(check: Check, lx: NonNullable<HostState['linux']>, s
       const re = new RegExp(check.pattern);
       return lx.processes.some((p) => re.test(p.cmd)) === (check.running ?? true);
     }
+    case 'web-request': {
+      const host = check.host ? new RegExp(check.host, 'i') : null;
+      const path = check.path ? new RegExp(check.path) : null;
+      return lx.web.requests.some((r) => (check.scheme === undefined || r.scheme === check.scheme) && (host === null || host.test(r.host)) && (path === null || path.test(r.path)) && (check.status === undefined || r.status === check.status) && (check.backend === undefined || r.backend === check.backend) && (check.server === undefined || r.server === check.server));
+    }
+    case 'nginx-config':
+      return testNginx({ ...lx, user: 'root' }).ok === check.valid;
   }
   return false;
 }
@@ -400,6 +416,17 @@ function sameList(a: 'all' | number[], b: 'all' | number[]): boolean {
   const sa = [...a].sort((x, y) => x - y);
   const sb = [...b].sort((x, y) => x - y);
   return sa.every((v, i) => v === sb[i]);
+}
+
+/** Render a simple regex as the text it looks for, so objective labels read naturally. */
+function readable(pattern: string): string {
+  return pattern
+    .replace(/\\s[+*]/g, ' ')
+    .replace(/\\b/g, '')
+    .replace(/\\(.)/g, '$1')
+    .replace(/[\^$]/g, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 function deviceFor(check: Check, net: NetworkState): DeviceState | undefined {
