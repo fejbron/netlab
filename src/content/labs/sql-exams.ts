@@ -1,5 +1,23 @@
 import type { Lab } from '../types';
-import { DB, sqlSite } from './sql-site';
+import { DB, shopWith, sqlSite } from './sql-site';
+
+/** A contact list assembled by hand over two years, with every mistake that implies. */
+const CONTACTS = `
+CREATE TABLE contacts (
+  id serial PRIMARY KEY,
+  email text,
+  name text NOT NULL,
+  marketing text
+);
+INSERT INTO contacts (email, name, marketing) VALUES
+  ('ada@example.com', 'Ada Lovelace', 'yes'),
+  ('bo@example.com', 'Bo Nilsson', 'NO'),
+  (NULL, 'Unknown Walk-in', NULL),
+  ('cleo@example.com', 'Cleo Marsh', 'Yes'),
+  ('ada@example.com', 'A. Lovelace', 'yes'),
+  ('dev@example.com', 'Dev Patel', NULL),
+  ('cleo@example.com', 'C Marsh', 'no');
+`;
 
 const MODULE = 'sql-exams';
 
@@ -76,6 +94,68 @@ export const sqlExamLabs: Lab[] = [
         id: 'report',
         label: 'Report the net quantity in each warehouse',
         checks: [{ type: 'sql-answer', device: DB, sql: 'SELECT w.code, sum(m.quantity) FROM warehouses w JOIN stock_moves m ON m.warehouse_id = w.id GROUP BY w.code', label: 'A query returned 35 in LDN and -4 in BRS' }],
+      },
+    ],
+  },
+  {
+    id: 'db-30-exam-clean-up-the-data',
+    moduleId: MODULE,
+    order: 3,
+    title: 'Exam: Clean Up the Data',
+    difficulty: 'Advanced',
+    estimatedMinutes: 25,
+    isExam: true,
+    description: 'Take a contact list nobody constrained, work out what is wrong with it, fix it, and make the same mistakes impossible. No hints are available.',
+    scenario:
+      'The contacts table has been maintained by hand for two years by people in a hurry. It has seven rows, and almost everything that can be wrong with a table is wrong with this one: an address missing entirely, the same address entered twice under different spellings of the name, and a marketing preference recorded as yes, Yes, NO, no and nothing at all.\n\nWork through it in order.\n\nFirst, survey the damage. Find how many rows have no email address. Find which addresses appear more than once, and how many times.\n\nThen fix it. Delete the row with no email: without one it cannot be contacted and cannot be de-duplicated. Of the remaining duplicates, keep the earliest row for each address and delete the later ones. Put the marketing column into one shape: every value lowercase, and anything missing set to no.\n\nThen make it stay fixed. Email must be present and must be unique. Marketing must be present and must be one of exactly yes or no.\n\nFinally, prove the rules are real by trying to add a contact whose address is already in the table, and report what you are left with: how many contacts, and how many of them have opted in.',
+    concepts: ['Surveying data quality', 'Deduplicating with min(id)', 'Normalising values with lower() and coalesce()', 'Adding constraints to existing data', 'Proving a constraint works'],
+    hints: [],
+    createState: () => sqlSite({ setup: shopWith(CONTACTS) }),
+    objectives: [
+      {
+        id: 'survey',
+        label: 'Survey what is wrong',
+        checks: [
+          { type: 'sql-answer', device: DB, rows: [[1]], label: 'A query counted the 1 row with no email' },
+          { type: 'sql-answer', device: DB, rows: [['ada@example.com', 2], ['cleo@example.com', 2]], label: 'A query found the 2 repeated addresses' },
+        ],
+      },
+      {
+        id: 'dedupe',
+        label: 'Remove the unreachable row and the later duplicates',
+        checks: [
+          { type: 'sql-table', device: DB, name: 'contacts', rows: 4, label: 'contacts is down to 4 rows' },
+          { type: 'sql-query', device: DB, sql: 'SELECT id FROM contacts ORDER BY id', rows: [[1], [2], [4], [6]], label: 'and the ones kept are the earliest of each address' },
+        ],
+      },
+      {
+        id: 'normalise',
+        label: 'Put the marketing column into one shape',
+        checks: [{ type: 'sql-query', device: DB, sql: 'SELECT marketing, count(*) FROM contacts GROUP BY marketing', rows: [['no', 2], ['yes', 2]], label: 'Every row is now yes or no' }],
+      },
+      {
+        id: 'constrain',
+        label: 'Make the same mistakes impossible',
+        checks: [
+          { type: 'sql-table', device: DB, name: 'contacts', columns: [{ name: 'email', type: 'text', notNull: true, unique: true }, { name: 'marketing', type: 'text', notNull: true }], label: 'email is required and unique, marketing is required' },
+          { type: 'sql-ran', device: DB, pattern: 'CHECK\\s*\\(', label: 'and a CHECK limits marketing to two values' },
+        ],
+      },
+      {
+        id: 'prove',
+        label: 'Prove a repeated address is refused',
+        checks: [
+          { type: 'shell-output', device: DB, pattern: 'duplicate key value violates unique constraint', label: 'The duplicate was refused' },
+          { type: 'sql-table', device: DB, name: 'contacts', rows: 4, label: 'and nothing was added' },
+        ],
+      },
+      {
+        id: 'report',
+        label: 'Report what is left',
+        checks: [
+          { type: 'sql-answer', device: DB, sql: 'SELECT count(*) FROM contacts', label: 'A query counted the surviving contacts' },
+          { type: 'sql-answer', device: DB, sql: "SELECT count(*) FROM contacts WHERE marketing = 'yes'", label: 'A query counted the ones who opted in' },
+        ],
       },
     ],
   },

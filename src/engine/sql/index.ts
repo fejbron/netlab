@@ -107,7 +107,7 @@ function describeTable(db: SqlDatabase, name: string): string[] {
     return [c.name, typeLabel(c), bits.join(' ')];
   });
   const out = ['Table "public.' + t.name + '"', ...formatResult(['Column', 'Type', 'Modifiers'], rows).slice(0, -1)];
-  const pk = t.columns.filter((c) => c.primaryKey).map((c) => c.name);
+  const pk = t.primaryKey ?? t.columns.filter((c) => c.primaryKey).map((c) => c.name);
   if (pk.length) out.push('Indexes:', '    "' + t.name + '_pkey" PRIMARY KEY, btree (' + pk.join(', ') + ')');
   const extra = Object.values(db.indexes).filter((i) => i.table === t.name);
   if (extra.length) {

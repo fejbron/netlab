@@ -139,10 +139,14 @@ export type Check = Base &
     /** The grader runs `sql` against the learner's database and compares what comes back. */
     | { type: 'sql-query'; sql: string; database?: string; rows?: SqlValue[][]; minRows?: number; maxRows?: number }
     /**
-     * The learner ran some query that returned the right answer. The grader works out what
-     * that is by running `sql` itself, so any wording that gets there is accepted.
+     * The learner ran some query that returned the right answer. Any wording that gets
+     * there is accepted, because the answer is what is compared rather than the text.
+     *
+     * By default the grader works out the expected rows by running `sql` itself, which is
+     * right when the answer does not change during the lab. When the lab goes on to alter
+     * the data the question was about, give `rows` instead and the expectation is fixed.
      */
-    | { type: 'sql-answer'; sql: string; ordered?: boolean; database?: string }
+    | { type: 'sql-answer'; sql?: string; rows?: SqlValue[][]; ordered?: boolean; database?: string }
     /** The learner ran a statement matching this regex. */
     | { type: 'sql-ran'; pattern: string; database?: string }
     | { type: 'sql-index'; table: string; column: string; database?: string }
@@ -409,9 +413,9 @@ function evaluateSqlCheck(check: Check, state: SqlState): boolean {
       return true;
     }
     case 'sql-answer': {
-      const want = queryFor(state, check.sql);
+      const want = check.rows ?? (check.sql ? queryFor(state, check.sql)?.rows : undefined);
       if (!want) return false;
-      return state.answers.some((a) => (check.ordered ? orderedRows(a.rows, want.rows) : sameRows(a.rows, want.rows)));
+      return state.answers.some((a) => (check.ordered ? orderedRows(a.rows, want) : sameRows(a.rows, want)));
     }
     case 'sql-ran': {
       const re = new RegExp(check.pattern, 'i');

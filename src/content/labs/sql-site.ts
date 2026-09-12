@@ -88,6 +88,57 @@ INSERT INTO order_items (order_id, product_id, quantity, unit_price) VALUES
   (8, 6, 2, 4.50);
 `;
 
+/** The standard shop, plus whatever else a lab needs in place before it starts. */
+export function shopWith(extra: string): string {
+  return SHOP_SCHEMA + SHOP_DATA + extra;
+}
+
+/**
+ * A second, unfamiliar database for the lab about reading a schema you did not write:
+ * a lending library, with one book nobody has ever borrowed and two loans still open.
+ */
+export const LIBRARY = `
+CREATE TABLE members (
+  id serial PRIMARY KEY,
+  name text NOT NULL,
+  joined date NOT NULL
+);
+
+CREATE TABLE books (
+  id serial PRIMARY KEY,
+  isbn text NOT NULL UNIQUE,
+  title text NOT NULL,
+  author text NOT NULL,
+  published integer NOT NULL
+);
+
+CREATE TABLE loans (
+  id serial PRIMARY KEY,
+  book_id integer NOT NULL REFERENCES books (id),
+  member_id integer NOT NULL REFERENCES members (id),
+  taken date NOT NULL,
+  returned date
+);
+
+INSERT INTO members (name, joined) VALUES
+  ('Hana Ito', '2024-09-02'),
+  ('Ivan Petrov', '2025-01-20'),
+  ('Joy Adeyemi', '2025-11-11');
+
+INSERT INTO books (isbn, title, author, published) VALUES
+  ('978-0132350884', 'Clean Code', 'Robert C. Martin', 2008),
+  ('978-0201616224', 'The Pragmatic Programmer', 'Andrew Hunt', 1999),
+  ('978-1449373320', 'Designing Data-Intensive Applications', 'Martin Kleppmann', 2017),
+  ('978-0596007126', 'Head First Design Patterns', 'Eric Freeman', 2004);
+
+INSERT INTO loans (book_id, member_id, taken, returned) VALUES
+  (1, 1, '2026-01-08', '2026-01-29'),
+  (2, 1, '2026-02-03', NULL),
+  (1, 2, '2026-02-10', '2026-02-24'),
+  (3, 3, '2026-02-18', NULL),
+  (2, 3, '2025-12-01', '2025-12-20');
+`;
+
 export interface SqlSiteOptions {
   /** SQL that builds the starting database. Defaults to the full shop. */
   setup?: string;

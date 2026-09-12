@@ -1,5 +1,22 @@
 import type { Lab } from '../types';
-import { DB, sqlSite } from './sql-site';
+import { DB, shopWith, sqlSite } from './sql-site';
+
+/** A mailing list somebody imported twice, which is how duplicates usually arrive. */
+const SUBSCRIBERS = `
+CREATE TABLE subscribers (
+  id serial PRIMARY KEY,
+  email text NOT NULL,
+  signed_up date NOT NULL
+);
+INSERT INTO subscribers (email, signed_up) VALUES
+  ('ada@example.com', '2025-11-02'),
+  ('bo@example.com', '2025-11-04'),
+  ('cleo@example.com', '2025-11-09'),
+  ('ada@example.com', '2026-01-15'),
+  ('dev@example.com', '2026-01-22'),
+  ('cleo@example.com', '2026-02-01'),
+  ('cleo@example.com', '2026-02-03');
+`;
 
 const MODULE = 'sql-design';
 
@@ -138,6 +155,57 @@ export const sqlDesignLabs: Lab[] = [
       { id: 'loyalty', label: 'Add loyalty with a default of bronze', checks: [{ type: 'sql-table', device: DB, name: 'customers', columns: [{ name: 'loyalty', type: 'text', notNull: true }], label: 'customers has a NOT NULL loyalty column' }, { type: 'sql-query', device: DB, sql: "SELECT count(*) FROM customers WHERE loyalty = 'bronze'", rows: [[6]], label: 'and all 6 existing customers are bronze' }] },
       { id: 'rename', label: 'Rename joined to signed_up', checks: [{ type: 'sql-table', device: DB, name: 'customers', columns: [{ name: 'signed_up', type: 'date' }], absent: ['joined'], label: 'joined is now signed_up' }] },
       { id: 'drop', label: 'Drop the phone column again', checks: [{ type: 'sql-table', device: DB, name: 'customers', absent: ['phone'], label: 'phone is gone' }, { type: 'sql-ran', device: DB, pattern: 'ADD\\s+COLUMN\\s+phone', label: 'after having added it' }] },
+    ],
+  },
+  {
+    id: 'db-27-find-and-fix-duplicates',
+    moduleId: MODULE,
+    order: 5,
+    title: 'Find and Fix Duplicates',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 11,
+    description: 'Track down duplicated rows with GROUP BY and HAVING, remove the extras, and add the constraint that stops them coming back.',
+    scenario:
+      'Somebody imported the mailing list twice. The subscribers table now holds seven rows for five people, and because nothing stops it, it will happen again.\n\nFind the damage first. Grouping by email and keeping only the groups with more than one row is the standard way to ask "what is duplicated, and how badly".\n\nThen try to add the rule that should have been there from the start, a UNIQUE constraint on email. It will be refused, and that refusal is useful: a constraint cannot be added to data that already breaks it, which tells you the cleanup has to come first.\n\nClean up by keeping the earliest sign-up for each address and deleting the rest. The lowest id per email is the one to keep. Then add the constraint for real, and prove it works by trying to insert a duplicate.',
+    concepts: ['Finding duplicates with GROUP BY and HAVING', 'Why a constraint cannot be added to broken data', 'Keeping one row per group with min(id)', 'ALTER TABLE ADD UNIQUE'],
+    hints: [
+      'SELECT email, count(*) FROM subscribers GROUP BY email HAVING count(*) > 1;',
+      'ALTER TABLE subscribers ADD UNIQUE (email); is refused while the duplicates are still there.',
+      'The rows worth keeping are SELECT min(id) FROM subscribers GROUP BY email, so delete everything not in that list.',
+      'Then add the constraint again, and try inserting an address that already exists.',
+    ],
+    createState: () => sqlSite({ setup: shopWith(SUBSCRIBERS) }),
+    objectives: [
+      { id: 'find', label: 'Find which addresses are duplicated', checks: [{ type: 'sql-answer', device: DB, rows: [['ada@example.com', 2], ['cleo@example.com', 3]], label: 'A query returned the 2 duplicated addresses with their counts' }] },
+      { id: 'refused', label: 'See the constraint refused while the data is dirty', checks: [{ type: 'shell-output', device: DB, pattern: 'duplicate key value|could not create unique index', label: 'Adding UNIQUE was refused' }] },
+      { id: 'clean', label: 'Keep only the earliest row per address', checks: [{ type: 'sql-table', device: DB, name: 'subscribers', rows: 4, label: 'subscribers is down to 4 rows' }, { type: 'sql-query', device: DB, sql: 'SELECT id FROM subscribers ORDER BY id', rows: [[1], [2], [3], [5]], label: 'and the rows kept are the earliest of each' }] },
+      { id: 'constrain', label: 'Add the constraint and prove it holds', checks: [{ type: 'sql-table', device: DB, name: 'subscribers', columns: [{ name: 'email', unique: true }], label: 'email is now unique' }, { type: 'sql-query', device: DB, sql: 'SELECT count(*) FROM subscribers', rows: [[4]], label: 'and a duplicate insert changed nothing' }] },
+    ],
+  },
+  {
+    id: 'db-28-model-a-choice',
+    moduleId: MODULE,
+    order: 6,
+    title: 'Model a Many-to-Many',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 11,
+    description: 'Add tags to products with a table in the middle, keyed on the pair of columns rather than on either one.',
+    scenario:
+      'The shop wants to tag products: gift, sale, new, and so on. A product can carry several tags and a tag applies to several products, so neither table can hold the other’s id in a column.\n\nThe answer is a third table holding nothing but pairs. What makes it work is the key: neither column is unique on its own, because a product appears once per tag and a tag once per product, but the combination must never repeat. A primary key can span two columns, and that is exactly what this needs.\n\nBuild tags with a generated id and a name that cannot repeat. Build product_tags with a product_id and a tag_id, each required and each pointing at its table, and a primary key over the pair. Add the tags gift, sale and new, then tag the espresso machine as a gift and on sale, and the burr grinder as a gift.\n\nThen use it: list the products tagged gift, list the tags on the espresso machine, and try to tag it as a gift a second time to see the pair refused.',
+    concepts: ['Junction tables', 'A primary key over two columns', 'Two foreign keys in one table', 'Querying through the middle table'],
+    hints: [
+      'CREATE TABLE tags (id serial PRIMARY KEY, name text NOT NULL UNIQUE);',
+      'CREATE TABLE product_tags (\n  product_id integer NOT NULL REFERENCES products (id),\n  tag_id integer NOT NULL REFERENCES tags (id),\n  PRIMARY KEY (product_id, tag_id)\n);',
+      'The espresso machine is product 1 and the burr grinder is product 2; look the tag ids up rather than guessing.',
+      'To list products by tag, join products to product_tags to tags and filter on the tag name.',
+    ],
+    createState: () => sqlSite(),
+    objectives: [
+      { id: 'tags', label: 'Create the tags table', checks: [{ type: 'sql-table', device: DB, name: 'tags', columns: [{ name: 'id', type: 'integer', primaryKey: true }, { name: 'name', type: 'text', notNull: true, unique: true }], label: 'tags has a generated id and a unique name' }] },
+      { id: 'join-table', label: 'Create product_tags keyed on the pair', checks: [{ type: 'sql-table', device: DB, name: 'product_tags', columns: [{ name: 'product_id', type: 'integer', notNull: true, references: 'products' }, { name: 'tag_id', type: 'integer', notNull: true, references: 'tags' }], label: 'product_tags points at both tables' }, { type: 'sql-ran', device: DB, pattern: 'PRIMARY\\s+KEY\\s*\\(\\s*\\w+\\s*,', label: 'with a primary key over both columns' }] },
+      { id: 'apply', label: 'Add the tags and apply three of them', checks: [{ type: 'sql-query', device: DB, sql: 'SELECT count(*) FROM tags', rows: [[3]], label: 'Three tags exist' }, { type: 'sql-query', device: DB, sql: 'SELECT count(*) FROM product_tags', rows: [[3]], label: 'and three products are tagged' }] },
+      { id: 'query', label: 'List the products tagged gift', checks: [{ type: 'sql-answer', device: DB, sql: "SELECT p.name FROM products p JOIN product_tags pt ON pt.product_id = p.id JOIN tags t ON t.id = pt.tag_id WHERE t.name = 'gift'", label: 'A query returned the 2 gift products' }] },
+      { id: 'refused', label: 'See the same pair refused a second time', checks: [{ type: 'shell-output', device: DB, pattern: 'duplicate key value violates unique constraint "product_tags_pkey"', label: 'The pair could not be repeated' }, { type: 'sql-query', device: DB, sql: 'SELECT count(*) FROM product_tags', rows: [[3]], label: 'and nothing was added' }] },
     ],
   },
 ];

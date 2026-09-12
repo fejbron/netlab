@@ -102,6 +102,8 @@ function castTo(v: SqlValue, type: SqlType): SqlValue {
 interface ColRef {
   table?: string;
   name: string;
+  /** Declared type, so division knows whether it is working in whole numbers. */
+  type?: SqlType;
 }
 
 interface RowSet {
@@ -268,8 +270,10 @@ function binary(op: string, le: Expr, re: Expr, scope: Scope, db: SqlDatabase): 
       const d = num(r, '/');
       if (d === 0) throw new SqlError('division by zero');
       const a = num(l, '/');
-      // Integer division truncates in SQL when both sides are whole numbers.
-      return Number.isInteger(a) && Number.isInteger(d) ? Math.trunc(a / d) : a / d;
+      // Dividing one whole number by another throws the remainder away, which is the
+      // classic surprise. It only stops happening when one side is genuinely numeric.
+      const whole = Number.isInteger(a) && Number.isInteger(d) && !numericish(le, scope) && !numericish(re, scope);
+      return whole ? Math.trunc(a / d) : a / d;
     }
     case '%': {
       const d = num(r, '%');
@@ -278,6 +282,36 @@ function binary(op: string, le: Expr, re: Expr, scope: Scope, db: SqlDatabase): 
     }
     default:
       throw new SqlError('operator does not exist: ' + op);
+  }
+}
+
+/**
+ * Whether an expression is numeric rather than a whole number, decided from how it is
+ * written and from the declared type of any column in it.
+ */
+function numericish(e: Expr, scope: Scope): boolean {
+  switch (e.k) {
+    case 'lit':
+      return e.dec === true;
+    case 'cast':
+      return e.type === 'numeric' || numericish(e.e, scope);
+    case 'col': {
+      const i = findColumn(scope, e);
+      if (i >= 0) return scope.cols[i].type === 'numeric';
+      for (let o = scope.outer; o; o = o.outer) {
+        const j = findColumn(o, e);
+        if (j >= 0) return o.cols[j].type === 'numeric';
+      }
+      return false;
+    }
+    case 'bin':
+      return numericish(e.l, scope) || numericish(e.r, scope);
+    case 'neg':
+      return numericish(e.e, scope);
+    case 'fn':
+      return e.name === 'AVG' || e.name === 'ROUND' || e.args.some((a) => numericish(a, scope));
+    default:
+      return false;
   }
 }
 
@@ -441,7 +475,7 @@ function sourceOf(db: SqlDatabase, item: FromItem, outer?: Scope): RowSet {
   }
   const t = getTable(db, item.name);
   const alias = item.alias ?? item.name;
-  return { cols: t.columns.map((c) => ({ table: alias, name: c.name })), rows: t.rows.map((r) => [...r]) };
+  return { cols: t.columns.map((c) => ({ table: alias, name: c.name, type: c.type })), rows: t.rows.map((r) => [...r]) };
 }
 
 function joinRows(db: SqlDatabase, item: Extract<FromItem, { k: 'join' }>, l: RowSet, r: RowSet, outer?: Scope): RowSet {
@@ -646,7 +680,7 @@ function isGroupedBy(e: Expr, keys: Expr[]): boolean {
 /* ------------------------------------------------------------ constraints */
 
 function rowScope(t: TableDef, row: SqlValue[]): Scope {
-  return { cols: t.columns.map((c) => ({ table: t.name, name: c.name })), row };
+  return { cols: t.columns.map((c) => ({ table: t.name, name: c.name, type: c.type })), row };
 }
 
 /** Apply every constraint on the table to one row that is about to be stored. */
@@ -680,7 +714,26 @@ function enforce(db: SqlDatabase, t: TableDef, row: SqlValue[], skipRow: number 
     }
     if (col.check) checkOne(db, t, row, col.check, col.name);
   });
+  if (t.primaryKey) uniqueOver(t, t.primaryKey, row, skipRow, t.name + '_pkey', true);
+  for (const idx of Object.values(db.indexes)) {
+    if (idx.unique && idx.table === t.name) uniqueOver(t, idx.columns, row, skipRow, idx.name, false);
+  }
   for (const text of t.checks ?? []) checkOne(db, t, row, text, undefined);
+}
+
+/** No other row may already hold this combination of values. */
+function uniqueOver(t: TableDef, names: string[], row: SqlValue[], skipRow: number | null, constraint: string, key: boolean): void {
+  const at = names.map((n) => t.columns.findIndex((c) => c.name === n)).filter((i) => i >= 0);
+  if (at.length !== names.length) return;
+  // A NULL anywhere in the set means the combination is unknown, so it cannot clash.
+  if (at.some((i) => row[i] === null)) return;
+  const clash = t.rows.findIndex((other, idx) => idx !== skipRow && at.every((i) => cmp(other[i], row[i]) === 0));
+  if (clash < 0) return;
+  throw new SqlError(
+    'duplicate key value violates unique constraint "' + constraint + '"',
+    'Key (' + names.join(', ') + ')=(' + at.map((i) => display(row[i])).join(', ') + ') already exists.',
+    key ? 'The combination has to be unique, even though neither column is on its own.' : undefined,
+  );
 }
 
 function checkOne(db: SqlDatabase, t: TableDef, row: SqlValue[], text: string, column: string | undefined): void {
@@ -766,7 +819,7 @@ export function execute(state: SqlState, stmt: Stmt, source: string): StatementR
           col.references.column = pk.name;
         }
       }
-      db.tables[stmt.name] = { name: stmt.name, columns: stmt.columns, rows: [], checks: stmt.checks.length ? stmt.checks : undefined };
+      db.tables[stmt.name] = { name: stmt.name, columns: stmt.columns, rows: [], primaryKey: stmt.primaryKey, checks: stmt.checks.length ? stmt.checks : undefined };
       return { tag: 'CREATE TABLE' };
     }
     case 'dropTable': {
@@ -793,6 +846,14 @@ export function execute(state: SqlState, stmt: Stmt, source: string): StatementR
         throw new SqlError('relation "' + name + '" already exists');
       }
       db.indexes[name] = { name, table: stmt.table, columns: stmt.columns, unique: stmt.unique };
+      if (stmt.unique) {
+        try {
+          t.rows.forEach((row, idx) => uniqueOver(t, stmt.columns, row, idx, name, false));
+        } catch (e) {
+          delete db.indexes[name];
+          throw e;
+        }
+      }
       return { tag: 'CREATE INDEX' };
     }
     case 'dropIndex': {
@@ -864,34 +925,52 @@ function insert(db: SqlDatabase, stmt: Extract<Stmt, { k: 'insert' }>): Statemen
     }
   }
 
-  const added: SqlValue[][] = [];
-  for (const values of incoming) {
-    const row = t.columns.map((col, i) => {
-      const at = targets.indexOf(i);
-      if (at < 0 || values[at] === undefined) return defaultFor(col, t, i);
-      return coerce(values[at], col, t.name);
-    });
-    enforce(db, t, row, null);
-    t.rows.push(row);
-    added.push(row);
+  // A statement either happens or it does not, so build the whole batch, then commit it
+  // in one go and put the table back if any row is refused.
+  const saved = t.rows;
+  const serials = t.columns.map((c) => c.serial);
+  t.rows = [...saved];
+  try {
+    for (const values of incoming) {
+      const row = t.columns.map((col, i) => {
+        const at = targets.indexOf(i);
+        if (at < 0 || values[at] === undefined) return defaultFor(col, t, i);
+        return coerce(values[at], col, t.name);
+      });
+      t.rows.push(row);
+      enforce(db, t, row, t.rows.length - 1);
+    }
+  } catch (e) {
+    t.rows = saved;
+    t.columns.forEach((c, i) => (c.serial = serials[i]));
+    throw e;
   }
-  return { tag: 'INSERT 0 ' + added.length };
+  return { tag: 'INSERT 0 ' + incoming.length };
 }
 
 function update(db: SqlDatabase, stmt: Extract<Stmt, { k: 'update' }>): StatementResult {
   const t = getTable(db, stmt.table);
   const sets = stmt.set.map((s) => ({ i: columnIndex(t, s.col), e: s.e }));
-  let touched = 0;
-  t.rows.forEach((row, idx) => {
-    const scope = rowScope(t, row);
-    if (stmt.where && !truthy(evaluate(stmt.where, scope, db))) return;
-    const next = [...row];
-    for (const s of sets) next[s.i] = coerce(evaluate(s.e, scope, db), t.columns[s.i], t.name);
-    enforce(db, t, next, idx);
-    t.rows[idx] = next;
-    touched++;
+  const original = t.rows;
+  // Which rows match, and what they become, are both decided against the table as it was:
+  // an UPDATE does not see its own changes part way through.
+  const touched: number[] = [];
+  original.forEach((row, idx) => {
+    if (!stmt.where || truthy(evaluate(stmt.where, rowScope(t, row), db))) touched.push(idx);
   });
-  return { tag: 'UPDATE ' + touched };
+  const next = original.map((r) => [...r]);
+  for (const idx of touched) {
+    const scope = rowScope(t, original[idx]);
+    for (const s of sets) next[idx][s.i] = coerce(evaluate(s.e, scope, db), t.columns[s.i], t.name);
+  }
+  t.rows = next;
+  try {
+    for (const idx of touched) enforce(db, t, next[idx], idx);
+  } catch (e) {
+    t.rows = original;
+    throw e;
+  }
+  return { tag: 'UPDATE ' + touched.length };
 }
 
 function remove(db: SqlDatabase, stmt: Extract<Stmt, { k: 'delete' }>): StatementResult {
@@ -957,10 +1036,13 @@ function alter(db: SqlDatabase, stmt: Extract<Stmt, { k: 'alterTable' }>): State
     }
     case 'addUnique':
     case 'addPrimaryKey': {
+      const composite = a.a === 'addPrimaryKey' && a.columns.length > 1;
       for (const name of a.columns) {
         const i = columnIndex(t, name);
-        t.columns[i] = { ...t.columns[i], unique: true, ...(a.a === 'addPrimaryKey' ? { primaryKey: true, notNull: true } : {}) };
+        if (a.a === 'addPrimaryKey') t.columns[i] = { ...t.columns[i], notNull: true, ...(composite ? {} : { primaryKey: true, unique: true }) };
+        else t.columns[i] = { ...t.columns[i], unique: true };
       }
+      if (composite) t.primaryKey = a.columns;
       t.rows.forEach((row, idx) => enforce(db, t, row, idx));
       return { tag: 'ALTER TABLE' };
     }

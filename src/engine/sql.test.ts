@@ -382,3 +382,130 @@ describe('the psql session itself', () => {
     expect(out[3]).not.toContain('null');
   });
 });
+
+describe('keys that span more than one column', () => {
+  const junction = () =>
+    createSqlState({
+      setup: `
+        CREATE TABLE products (id serial PRIMARY KEY, name text NOT NULL);
+        CREATE TABLE tags (id serial PRIMARY KEY, name text NOT NULL UNIQUE);
+        CREATE TABLE product_tags (
+          product_id integer NOT NULL REFERENCES products (id),
+          tag_id integer NOT NULL REFERENCES tags (id),
+          PRIMARY KEY (product_id, tag_id)
+        );
+        INSERT INTO products (name) VALUES ('Grinder'), ('Beans');
+        INSERT INTO tags (name) VALUES ('gift'), ('sale');
+      `,
+    });
+
+  it('lets each column repeat while the pair stays unique', () => {
+    const s = junction();
+    // The same product twice and the same tag twice are both fine.
+    expect(run(s, 'INSERT INTO product_tags (product_id, tag_id) VALUES (1, 1), (1, 2), (2, 1);')).toEqual(['INSERT 0 3']);
+    expect(rows(s, 'SELECT count(*) FROM product_tags;')).toEqual([['3']]);
+    const out = run(s, 'INSERT INTO product_tags (product_id, tag_id) VALUES (1, 2);').join('\n');
+    expect(out).toContain('duplicate key value violates unique constraint "product_tags_pkey"');
+    expect(out).toContain('(product_id, tag_id)=(1, 2) already exists');
+  });
+
+  it('requires every part of the key', () => {
+    const s = junction();
+    expect(run(s, 'INSERT INTO product_tags (product_id, tag_id) VALUES (1, NULL);').join('\n')).toContain('violates not-null constraint');
+  });
+
+  it('shows the whole key in \\d', () => {
+    expect(run(junction(), '\\d product_tags').join('\n')).toContain('PRIMARY KEY, btree (product_id, tag_id)');
+  });
+
+  it('can be added afterwards, and refuses data that already breaks it', () => {
+    const s = createSqlState({ setup: 'CREATE TABLE pairs (a integer NOT NULL, b integer NOT NULL); INSERT INTO pairs (a, b) VALUES (1, 1), (1, 1);' });
+    expect(run(s, 'ALTER TABLE pairs ADD PRIMARY KEY (a, b);').join('\n')).toContain('duplicate key value');
+    run(s, 'DELETE FROM pairs;');
+    expect(run(s, 'ALTER TABLE pairs ADD PRIMARY KEY (a, b);')).toEqual(['ALTER TABLE']);
+    run(s, 'INSERT INTO pairs (a, b) VALUES (1, 1);');
+    expect(run(s, 'INSERT INTO pairs (a, b) VALUES (1, 1);').join('\n')).toContain('duplicate key value');
+  });
+});
+
+describe('unique indexes', () => {
+  const shop = () => createSqlState({ setup: "CREATE TABLE staff (id serial PRIMARY KEY, email text, team text); INSERT INTO staff (email, team) VALUES ('a@x', 'ops'), ('b@x', 'dev');" });
+
+  it('refuse a duplicate once created', () => {
+    const s = shop();
+    expect(run(s, 'CREATE UNIQUE INDEX staff_email_key ON staff (email);')).toEqual(['CREATE INDEX']);
+    expect(run(s, "INSERT INTO staff (email, team) VALUES ('a@x', 'dev');").join('\n')).toContain('duplicate key value violates unique constraint "staff_email_key"');
+    expect(run(s, "INSERT INTO staff (email, team) VALUES ('c@x', 'dev');")).toEqual(['INSERT 0 1']);
+  });
+
+  it('cannot be created over data that already breaks them', () => {
+    const s = shop();
+    run(s, "INSERT INTO staff (email, team) VALUES ('a@x', 'dev');");
+    expect(run(s, 'CREATE UNIQUE INDEX staff_email_key ON staff (email);').join('\n')).toContain('duplicate key value');
+    // The failed index is not left behind half-made.
+    expect(run(s, '\\di').join('\n')).not.toContain('staff_email_key');
+  });
+
+  it('let NULLs repeat, because two unknowns are not known to be equal', () => {
+    const s = shop();
+    run(s, 'CREATE UNIQUE INDEX staff_email_key ON staff (email);');
+    expect(run(s, "INSERT INTO staff (email, team) VALUES (NULL, 'ops'), (NULL, 'dev');")).toEqual(['INSERT 0 2']);
+  });
+
+  it('are only used by the planner when the leading column is filtered', () => {
+    const s = shop();
+    run(s, 'CREATE INDEX staff_team_email_idx ON staff (team, email);');
+    expect(run(s, "EXPLAIN SELECT * FROM staff WHERE team = 'ops';").join('\n')).toContain('Index Scan using staff_team_email_idx');
+    expect(run(s, "EXPLAIN SELECT * FROM staff WHERE email = 'a@x';").join('\n')).toContain('Seq Scan on staff');
+  });
+});
+
+describe('whole numbers versus numeric', () => {
+  const s = () => createSqlState({ setup: 'CREATE TABLE t (whole integer NOT NULL, money numeric NOT NULL); INSERT INTO t (whole, money) VALUES (7, 7);' });
+
+  it('throws the remainder away when both sides are whole numbers', () => {
+    expect(rows(s(), 'SELECT 7 / 2;')).toEqual([['3']]);
+    expect(rows(s(), 'SELECT whole / 2 FROM t;')).toEqual([['3']]);
+  });
+
+  it('keeps it when either side is numeric', () => {
+    // A literal written with a decimal point is numeric even though its value is whole.
+    expect(rows(s(), 'SELECT 7.0 / 2;')).toEqual([['3.5']]);
+    expect(rows(s(), 'SELECT money / 2 FROM t;')).toEqual([['3.5']]);
+    // The usual ways of asking for the real answer both work.
+    expect(rows(s(), 'SELECT whole::numeric / 2 FROM t;')).toEqual([['3.5']]);
+    expect(rows(s(), 'SELECT whole * 1.0 / 2 FROM t;')).toEqual([['3.5']]);
+    expect(rows(s(), 'SELECT round(whole::numeric / 2, 2) FROM t;')).toEqual([['3.5']]);
+  });
+
+  it('still refuses to divide by zero', () => {
+    expect(run(s(), 'SELECT 1 / 0;').join('\n')).toContain('division by zero');
+  });
+});
+
+describe('a statement either happens or it does not', () => {
+  const s = () =>
+    createSqlState({
+      setup: "CREATE TABLE seats (id integer PRIMARY KEY, who text); INSERT INTO seats (id, who) VALUES (1, 'Ada'), (2, 'Bo');",
+    });
+
+  it('adds none of a multi-row INSERT when one row is refused', () => {
+    const st = s();
+    expect(run(st, "INSERT INTO seats (id, who) VALUES (3, 'Cleo'), (1, 'Clash'), (4, 'Dev');").join('\n')).toContain('duplicate key value');
+    // Cleo and Dev were in the same statement as the clash, so neither landed.
+    expect(rows(st, 'SELECT count(*) FROM seats;')).toEqual([['2']]);
+  });
+
+  it('changes no rows when an UPDATE would break a constraint', () => {
+    const st = s();
+    expect(run(st, 'UPDATE seats SET id = 1;').join('\n')).toContain('duplicate key value');
+    expect(rows(st, 'SELECT id FROM seats ORDER BY id;')).toEqual([['1'], ['2']]);
+  });
+
+  it('does not let an UPDATE see its own changes while it runs', () => {
+    const st = createSqlState({ setup: 'CREATE TABLE n (v integer NOT NULL); INSERT INTO n (v) VALUES (1), (2), (3);' });
+    // The subquery sees the table as it was, so every row gets the original maximum.
+    run(st, 'UPDATE n SET v = (SELECT max(v) FROM n);');
+    expect(rows(st, 'SELECT v FROM n;')).toEqual([['3'], ['3'], ['3']]);
+  });
+});

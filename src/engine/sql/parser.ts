@@ -135,7 +135,7 @@ export function isComplete(sql: string): boolean {
 /* -------------------------------------------------------------------- ast */
 
 export type Expr =
-  | { k: 'lit'; v: SqlValue }
+  | { k: 'lit'; v: SqlValue; dec?: boolean }
   | { k: 'col'; table?: string; name: string }
   | { k: 'star'; table?: string }
   | { k: 'not'; e: Expr }
@@ -185,7 +185,7 @@ export type Stmt =
   | { k: 'insert'; table: string; columns?: string[]; values?: Expr[][]; select?: Select }
   | { k: 'update'; table: string; set: Array<{ col: string; e: Expr }>; where?: Expr }
   | { k: 'delete'; table: string; where?: Expr }
-  | { k: 'createTable'; name: string; ifNotExists?: boolean; columns: ColumnDef[]; checks: string[] }
+  | { k: 'createTable'; name: string; ifNotExists?: boolean; columns: ColumnDef[]; checks: string[]; primaryKey?: string[] }
   | { k: 'dropTable'; names: string[]; ifExists?: boolean }
   | { k: 'alterTable'; table: string; action: AlterAction }
   | { k: 'createIndex'; name?: string; table: string; columns: string[]; unique?: boolean; ifNotExists?: boolean }
@@ -544,7 +544,7 @@ class Parser {
     const tok = this.peek();
     if (tok.kind === 'number') {
       this.next();
-      return { k: 'lit', v: Number(tok.value) };
+      return { k: 'lit', v: Number(tok.value), dec: tok.value.includes('.') };
     }
     if (tok.kind === 'string') {
       this.next();
@@ -739,18 +739,22 @@ class Parser {
     this.expect('(');
     const columns: ColumnDef[] = [];
     const checks: string[] = [];
+    const key: { composite?: string[] } = {};
     do {
       if (this.at(')')) break;
       if (this.eat('CONSTRAINT')) this.name();
       if (this.at('PRIMARY', 'UNIQUE', 'CHECK', 'FOREIGN')) {
-        this.tableConstraint(columns, checks);
+        this.tableConstraint(columns, checks, key);
         continue;
       }
       columns.push(this.columnDef());
     } while (this.eat(','));
     this.expect(')');
     if (columns.length === 0) throw new SqlError('table "' + name + '" must have at least one column');
-    return { k: 'createTable', name, ifNotExists, columns, checks };
+    for (const n of key.composite ?? []) {
+      if (!columns.some((c) => c.name === n)) throw new SqlError('column "' + n + '" named in key does not exist');
+    }
+    return { k: 'createTable', name, ifNotExists, columns, checks, primaryKey: key.composite };
   }
 
   private ifNotExists(): boolean {
@@ -850,20 +854,24 @@ class Parser {
     return this.src.slice(start, end).trim();
   }
 
-  private tableConstraint(columns: ColumnDef[], checks: string[]): void {
+  private tableConstraint(columns: ColumnDef[], checks: string[], key: { composite?: string[] }): void {
     if (this.eat('CHECK')) {
       checks.push(this.parenSource());
       return;
     }
     if (this.eat('PRIMARY')) {
       this.expect('KEY');
-      for (const n of this.nameList()) {
+      const names = this.nameList();
+      for (const n of names) {
         const c = columns.find((x) => x.name === n);
-        if (c) {
-          c.primaryKey = true;
-          c.notNull = true;
-        }
+        // Every part of a key is required, whether the key is one column or several.
+        if (c) c.notNull = true;
       }
+      // Only a single-column key makes that column unique on its own.
+      if (names.length === 1) {
+        const c = columns.find((x) => x.name === names[0]);
+        if (c) c.primaryKey = true;
+      } else key.composite = names;
       return;
     }
     if (this.eat('UNIQUE')) {

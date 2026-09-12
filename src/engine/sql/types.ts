@@ -31,6 +31,12 @@ export interface TableDef {
   name: string;
   columns: ColumnDef[];
   rows: SqlValue[][];
+  /**
+   * A key spanning more than one column, as a junction table uses: no single column is
+   * unique on its own, but the combination is. A single-column key is recorded on the
+   * column instead, so this is only set when there are two or more.
+   */
+  primaryKey?: string[];
   /** Table-level CHECK constraints, as written. */
   checks?: string[];
 }

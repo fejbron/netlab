@@ -1,5 +1,5 @@
 import type { Lab } from '../types';
-import { DB, sqlSite } from './sql-site';
+import { DB, LIBRARY, sqlSite } from './sql-site';
 
 const MODULE = 'sql-query';
 
@@ -104,6 +104,57 @@ export const sqlQueryLabs: Lab[] = [
       { id: 'hasemail', label: 'Find the customers who do have one', checks: [{ type: 'sql-answer', device: DB, sql: 'SELECT name FROM customers WHERE email IS NOT NULL', label: 'A query returned the other 5 customers' }] },
       { id: 'count', label: 'Count the customers with a city on file', checks: [{ type: 'sql-answer', device: DB, sql: 'SELECT count(*) FROM customers WHERE city IS NOT NULL', label: 'A query returned 5' }] },
       { id: 'coalesce', label: 'List every customer with a readable city', checks: [{ type: 'sql-answer', device: DB, sql: "SELECT name, coalesce(city, 'unknown') FROM customers", label: 'A query returned all 6 customers with no blank city' }] },
+    ],
+  },
+  {
+    id: 'db-21-compute-and-name',
+    moduleId: MODULE,
+    order: 5,
+    title: 'Compute and Name',
+    difficulty: 'Beginner',
+    estimatedMinutes: 9,
+    description: 'Calculate new columns from old ones, label them with AS, and meet the division that throws away the remainder.',
+    scenario:
+      'A query does not have to return what is stored. It can return anything you can work out from it, so the arithmetic lives in the database rather than in a spreadsheet somebody forgot to update.\n\nStart with prices including twenty per cent VAT, rounded to two decimals, and give the new column a name with AS. Without a name the database calls it something unhelpful.\n\nThen a trap worth meeting on purpose. Ask how many sets of three each product makes: stock divided by 3. The burr grinder has eleven in stock, and the answer comes back as 3, not 3.67. Dividing one whole number by another gives a whole number and the remainder is simply dropped. Ask again with stock::numeric / 3 and the real answer appears.\n\nFinish with two more shapes: a price band for each product using CASE, and a single readable label per product made by joining text together with ||.',
+    concepts: ['Computed columns', 'AS', 'round()', 'Integer division', 'Casting with ::', 'CASE WHEN', 'Concatenation with ||'],
+    hints: [
+      'SELECT name, round(price * 1.2, 2) AS with_vat FROM products;',
+      'SELECT name, stock / 3 FROM products; gives whole numbers only. Compare it with round(stock::numeric / 3, 2).',
+      "CASE WHEN price >= 100 THEN 'premium' WHEN price >= 20 THEN 'standard' ELSE 'budget' END, and remember the END.",
+      "|| glues text together: name || ' (' || category || ')'.",
+    ],
+    createState: () => sqlSite(),
+    objectives: [
+      { id: 'vat', label: 'Show every price including VAT', checks: [{ type: 'sql-answer', device: DB, sql: 'SELECT name, round(price * 1.2, 2) FROM products', label: 'A query returned all 8 prices with VAT added' }] },
+      { id: 'whole', label: 'See whole-number division drop the remainder', checks: [{ type: 'sql-answer', device: DB, sql: 'SELECT name, stock / 3 FROM products', label: 'A query returned the truncated sets of three' }] },
+      { id: 'exact', label: 'Ask again and get the real answer', checks: [{ type: 'sql-answer', device: DB, sql: 'SELECT name, round(stock::numeric / 3, 2) FROM products', label: 'A query returned the same sums to two decimals' }] },
+      { id: 'bands', label: 'Put each product in a price band', checks: [{ type: 'sql-answer', device: DB, sql: "SELECT name, CASE WHEN price >= 100 THEN 'premium' WHEN price >= 20 THEN 'standard' ELSE 'budget' END FROM products", label: 'A query banded all 8 products' }] },
+      { id: 'label', label: 'Build one readable label per product', checks: [{ type: 'sql-answer', device: DB, sql: "SELECT name || ' (' || category || ')' FROM products", label: 'A query returned 8 labels of the form Name (category)' }] },
+    ],
+  },
+  {
+    id: 'db-22-read-a-schema',
+    moduleId: MODULE,
+    order: 6,
+    title: 'Read a Schema You Did Not Write',
+    difficulty: 'Beginner',
+    estimatedMinutes: 9,
+    description: 'Open an unfamiliar database, work out how its tables relate, and answer three questions about it.',
+    scenario:
+      'This is not the shop. You have been handed a library database you have never seen, which is the normal way of meeting one.\n\nThe method is always the same. \\dt tells you which tables exist. \\d on each one tells you its columns and, at the bottom, its foreign keys, and those are what tell you how the tables fit together. A column called book_id that references books is the whole story of the relationship.\n\nRead the three tables, then answer the questions the librarian actually has. Which books has nobody ever borrowed? What is out on loan right now, and who has it? And who borrows the most?\n\nOne column deserves attention: a loan that has not come back yet has no return date, so returned is NULL. That is how you tell what is still out.',
+    concepts: ['Exploring an unfamiliar database', '\\dt and \\d', 'Reading foreign keys', 'NULL as "has not happened yet"'],
+    hints: [
+      'Start with \\dt, then \\d members, \\d books and \\d loans.',
+      'The foreign keys listed under \\d loans tell you that a loan belongs to one book and one member.',
+      'A book nobody has borrowed has no matching row in loans: use NOT EXISTS or a LEFT JOIN with a NULL test.',
+      'Still out means returned IS NULL. Join loans to books and members to say which book and who has it.',
+    ],
+    createState: () => sqlSite({ setup: LIBRARY, database: 'library' }),
+    objectives: [
+      { id: 'explore', label: 'Read the schema before querying it', checks: [{ type: 'command', device: DB, pattern: '^\\\\dt$', label: 'Run \\dt' }, { type: 'command', device: DB, pattern: '^\\\\d\\s+loans$', label: 'Run \\d loans' }] },
+      { id: 'never', label: 'Find the book nobody has borrowed', checks: [{ type: 'sql-answer', device: DB, sql: 'SELECT title FROM books b WHERE NOT EXISTS (SELECT 1 FROM loans l WHERE l.book_id = b.id)', label: 'A query returned the 1 unborrowed book' }] },
+      { id: 'out', label: 'Find what is out on loan, and who has it', checks: [{ type: 'sql-answer', device: DB, sql: 'SELECT b.title, m.name FROM loans l JOIN books b ON b.id = l.book_id JOIN members m ON m.id = l.member_id WHERE l.returned IS NULL', label: 'A query returned the 2 open loans with their borrowers' }] },
+      { id: 'busiest', label: 'Count the loans each member has taken', checks: [{ type: 'sql-answer', device: DB, sql: 'SELECT m.name, count(*) FROM members m JOIN loans l ON l.member_id = m.id GROUP BY m.name', label: 'A query counted loans per member' }] },
     ],
   },
 ];

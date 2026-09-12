@@ -114,4 +114,53 @@ export const sqlChangeLabs: Lab[] = [
       },
     ],
   },
+  {
+    id: 'db-25-copy-and-archive',
+    moduleId: MODULE,
+    order: 4,
+    title: 'Copy Before You Delete',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 10,
+    description: 'Move rows out of a live table into an archive with INSERT ... SELECT, then delete them in the right order.',
+    scenario:
+      'Cancelled orders are cluttering the orders table, but throwing them away would destroy the record. The answer is to copy them somewhere else first.\n\nINSERT can take its rows from a query instead of from a list of values, which is how you copy data between tables without it ever leaving the database. Build an orders_archive table with the same shape, then fill it from a SELECT that picks out the cancelled orders.\n\nThen delete them, and discover the order matters. An order has items pointing at it, and the foreign key will not let you remove a row something still references. Children first, then the parent. Check the counts before and after so you know exactly what moved.',
+    concepts: ['INSERT ... SELECT', 'Archiving before deleting', 'Deleting children before parents', 'Checking counts either side of a change'],
+    hints: [
+      'CREATE TABLE orders_archive (id integer PRIMARY KEY, customer_id integer NOT NULL, placed date NOT NULL, status text NOT NULL);',
+      "INSERT INTO orders_archive (id, customer_id, placed, status) SELECT id, customer_id, placed, status FROM orders WHERE status = 'cancelled';",
+      'Delete the items first: DELETE FROM order_items WHERE order_id IN (SELECT id FROM orders_archive);',
+      'Then the order itself: DELETE FROM orders WHERE id IN (SELECT id FROM orders_archive);',
+    ],
+    createState: () => sqlSite(),
+    objectives: [
+      { id: 'table', label: 'Create the archive table', checks: [{ type: 'sql-table', device: DB, name: 'orders_archive', columns: [{ name: 'id', type: 'integer' }, { name: 'customer_id', type: 'integer' }, { name: 'placed', type: 'date' }, { name: 'status', type: 'text' }], label: 'orders_archive has the same four columns' }] },
+      { id: 'copy', label: 'Copy the cancelled order into it with a query', checks: [{ type: 'sql-query', device: DB, sql: 'SELECT id, status FROM orders_archive', rows: [[7, 'cancelled']], label: 'The cancelled order is archived' }, { type: 'sql-ran', device: DB, pattern: 'INSERT\\s+INTO\\s+orders_archive\\s*\\(?[^)]*\\)?\\s*SELECT', label: 'Copied it with INSERT ... SELECT' }] },
+      { id: 'items', label: 'Remove its items first', checks: [{ type: 'sql-query', device: DB, sql: 'SELECT count(*) FROM order_items WHERE order_id = 7', rows: [[0]], label: 'Order 7 has no items left' }, { type: 'sql-query', device: DB, sql: 'SELECT count(*) FROM order_items', rows: [[13]], label: 'and the other 13 items are untouched' }] },
+      { id: 'order', label: 'Then remove the order', checks: [{ type: 'sql-query', device: DB, sql: 'SELECT count(*) FROM orders', rows: [[7]], label: 'orders is down to 7 rows' }, { type: 'sql-query', device: DB, sql: "SELECT count(*) FROM orders WHERE status = 'cancelled'", rows: [[0]], label: 'and none of them is cancelled' }] },
+    ],
+  },
+  {
+    id: 'db-26-update-from-what-you-find',
+    moduleId: MODULE,
+    order: 5,
+    title: 'Update What a Query Finds',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 10,
+    description: 'Drive an UPDATE from a subquery, so the rows it changes are the rows another question identifies.',
+    scenario:
+      'So far every UPDATE has named its rows directly. Real ones rarely can: the rows to change are the answer to a question, and putting that question in the WHERE clause is both shorter and safer than pasting in a list of ids that was correct an hour ago.\n\nThree changes, each driven by a query. Close every order belonging to Ada Lovelace, without looking up her id by hand. Set the stock to zero on every product that has never been ordered. And give five per cent off every product in the category whose products average more than 100, which the database can work out for itself.\n\nOne habit worth forming while you do it: run the inner SELECT on its own first. If it returns the rows you expected, wrapping it in an UPDATE is safe. If it does not, you have just saved yourself.',
+    concepts: ['Subqueries in WHERE', 'Updating by question rather than by id', 'Checking the SELECT before running the UPDATE', 'GROUP BY inside a subquery'],
+    hints: [
+      "UPDATE orders SET status = 'closed' WHERE customer_id = (SELECT id FROM customers WHERE name = 'Ada Lovelace');",
+      'UPDATE products SET stock = 0 WHERE id NOT IN (SELECT product_id FROM order_items);',
+      'The dear category is the answer to SELECT category FROM products GROUP BY category HAVING avg(price) > 100.',
+      'Put that whole query inside WHERE category IN ( ... ) and set price = round(price * 0.95, 2).',
+    ],
+    createState: () => sqlSite(),
+    objectives: [
+      { id: 'ada', label: 'Close every order of Ada’s, found by name', checks: [{ type: 'sql-query', device: DB, sql: "SELECT count(*) FROM orders WHERE status = 'closed'", rows: [[2]], label: 'Ada’s 2 orders are closed' }, { type: 'sql-query', device: DB, sql: "SELECT count(*) FROM orders WHERE status = 'closed' AND customer_id <> 1", rows: [[0]], label: 'and nobody else’s were' }] },
+      { id: 'stock', label: 'Zero the stock of anything never ordered', checks: [{ type: 'sql-query', device: DB, sql: "SELECT stock FROM products WHERE sku = 'FLT-500'", rows: [[0]], label: 'The unsold product is at zero' }, { type: 'sql-query', device: DB, sql: 'SELECT count(*) FROM products WHERE stock = 0', rows: [[1]], label: 'and it is the only one' }] },
+      { id: 'discount', label: 'Discount the expensive category', checks: [{ type: 'sql-query', device: DB, sql: "SELECT price FROM products WHERE category = 'appliances' ORDER BY price", rows: [[32.3], [85.03], [236.55]], label: 'The three appliances have 5 per cent off' }, { type: 'sql-query', device: DB, sql: "SELECT price FROM products WHERE category = 'coffee' ORDER BY price", rows: [[5.25], [18.5], [22]], label: 'and the coffee is unchanged' }] },
+    ],
+  },
 ];

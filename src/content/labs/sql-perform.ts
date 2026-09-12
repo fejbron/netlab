@@ -77,4 +77,30 @@ export const sqlPerformLabs: Lab[] = [
       { id: 'filter', label: 'Find the orders worth more than 100', checks: [{ type: 'sql-answer', device: DB, sql: 'SELECT * FROM order_totals WHERE total > 100', label: 'A query returned the 3 orders over 100' }] },
     ],
   },
+  {
+    id: 'db-29-choose-the-right-index',
+    moduleId: MODULE,
+    order: 4,
+    title: 'Choose the Right Index',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 10,
+    description: 'Index two columns at once, find out which queries it helps and which it does not, and use a unique index as a constraint.',
+    scenario:
+      'An index can cover more than one column, and the order you list them in decides what it is good for. Think of a phone book sorted by surname then first name: it finds everyone called Patel instantly, and is no help at all for finding everyone called Dev.\n\nIndex orders on status and then placed. Ask for the pending orders and the plan uses it. Ask for the orders placed on one date, with no mention of status, and the plan goes back to reading the whole table, because the index is sorted by status first and a date on its own gives it nothing to start from.\n\nThen the other use of an index. Made unique, it stops duplicates as firmly as a constraint does. Add one on customer email, try to add a second customer with an address already in use, and watch it refused. Note what it does not refuse: two customers with no email at all, because NULL means unknown and two unknowns are not known to be the same.',
+    concepts: ['Multi-column indexes', 'Why the leading column matters', 'Unique indexes as constraints', 'NULLs do not clash'],
+    hints: [
+      'CREATE INDEX orders_status_placed_idx ON orders (status, placed);',
+      "EXPLAIN SELECT * FROM orders WHERE status = 'pending'; uses it. EXPLAIN SELECT * FROM orders WHERE placed = '2026-02-14'; does not.",
+      'CREATE UNIQUE INDEX customers_email_key ON customers (email);',
+      "Insert a customer using ada@example.com to see it refused, then insert two with no email at all to see that NULLs are allowed to repeat.",
+    ],
+    createState: () => sqlSite(),
+    objectives: [
+      { id: 'create', label: 'Index orders on status and then date', checks: [{ type: 'sql-index', device: DB, table: 'orders', column: 'status', label: 'An index leads with orders.status' }] },
+      { id: 'used', label: 'See it used for a status filter', checks: [{ type: 'shell-output', device: DB, pattern: 'Index Scan using orders_status', label: 'The plan used the new index' }] },
+      { id: 'unused', label: 'See it ignored for a date filter', checks: [{ type: 'shell-output', device: DB, pattern: 'Seq Scan on orders', label: 'The plan fell back to reading the table' }] },
+      { id: 'unique', label: 'Use a unique index to refuse a duplicate email', checks: [{ type: 'shell-output', device: DB, pattern: 'duplicate key value violates unique constraint "customers_email_key"', label: 'A repeated address was refused' }, { type: 'sql-query', device: DB, sql: "SELECT count(*) FROM customers WHERE email = 'ada@example.com'", rows: [[1]], label: 'and only one customer holds it' }] },
+      { id: 'nulls', label: 'See that missing emails are still allowed to repeat', checks: [{ type: 'sql-query', device: DB, sql: 'SELECT count(*) FROM customers WHERE email IS NULL', rows: [[3]], label: 'Three customers now have no email and none was refused' }] },
+    ],
+  },
 ];
