@@ -36,6 +36,7 @@ import {
   type LinuxState,
 } from './fs';
 import { fail, ok, type CmdCtx, type CmdResult, type Command } from './shell';
+import { formatResult, runSqlLine } from '../sql';
 import { loadNginx, makeCertificate, makePrivateKey, opensslDate, parseCertificate, runtime, servicePorts, testNginx } from './web';
 import { APACHE_MODULES, apacheModelFromDisk, enabledModules, installApacheFiles, loadApache, testApache } from './apache';
 import { installAppFiles, installNginxFiles } from './fs';
@@ -993,6 +994,42 @@ export const COMMANDS: Record<string, Command> = {
     },
   },
 
+  psql: {
+    help: 'PostgreSQL interactive terminal',
+    run: (ctx) => {
+      const lx = ctx.state;
+      const socket = 'psql: error: connection to server on socket "/var/run/postgresql/.s.PGSQL.5432" failed';
+      if (!lx.packages.includes('postgresql') || !lx.databases) {
+        return fail([socket + ': No such file or directory', '	Is the server running locally and accepting connections on that socket?'], 2);
+      }
+      if (!lx.services.postgresql?.active) {
+        return fail([socket + ': Connection refused', '	Is the server running locally and accepting connections on that socket?'], 2);
+      }
+
+      let wantDb: string | undefined;
+      let command: string | undefined;
+      let list = false;
+      for (let i = 0; i < ctx.args.length; i++) {
+        const a = ctx.args[i];
+        if (a === '-c' || a === '--command') command = ctx.args[++i];
+        else if (a === '-l' || a === '--list') list = true;
+        else if (a === '-U' || a === '--username' || a === '-h' || a === '-p') i++;
+        else if (a === '-d' || a === '--dbname') wantDb = ctx.args[++i];
+        else if (!a.startsWith('-')) wantDb = a;
+      }
+
+      const names = Object.keys(lx.databases);
+      if (list) return ok(['List of databases', ...formatResult(['Name', 'Owner', 'Encoding'], names.map((n) => [n, lx.user, 'UTF8']))]);
+
+      const name = wantDb ?? (names.length === 1 ? names[0] : lx.user);
+      const db = lx.databases[name];
+      if (!db) return fail([socket.replace('failed', 'failed') + ': FATAL:  database "' + name + '" does not exist'], 2);
+
+      if (command !== undefined) return ok(runSqlLine(db, command.endsWith(';') ? command : command + ';').output);
+      lx.pending = { kind: 'sql', db: name };
+      return ok(['psql (16.2 (Ubuntu 16.2-1.pgdg22.04+1))', 'Type "help" for help.', '']);
+    },
+  },
   whoami: { help: 'print effective user name', run: (ctx) => ok([ctx.state.user]) },
   id: {
     help: 'print real and effective user and group IDs',

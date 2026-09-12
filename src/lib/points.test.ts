@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { labs, labsForPath } from '../content';
+import { labs, labsForPath, paths } from '../content';
 import type { Lab } from '../content';
 import { DIFFICULTY_POINTS, EXAM_MULTIPLIER, formatPoints, labPoints, maxPoints, maxTotalPoints, totalPoints } from './points';
 import type { ProgressMap } from './progress';
@@ -36,8 +36,8 @@ describe('lab points', () => {
     expect(totalPoints(labs, progress)).toBe(labPoints(first, 3) + labPoints(second, 1));
     expect(totalPoints(labs, {})).toBe(0);
     expect(maxTotalPoints(labs)).toBeGreaterThan(totalPoints(labs, progress));
-    // Each path can be totalled on its own for its dashboard.
-    expect(maxTotalPoints(labsForPath('ccna')) + maxTotalPoints(labsForPath('linux'))).toBe(maxTotalPoints(labs));
+    // Each path can be totalled on its own for its dashboard, and together they are the whole board.
+    expect(paths.reduce((n, p) => n + maxTotalPoints(labsForPath(p.id)), 0)).toBe(maxTotalPoints(labs));
   });
 
   it('formats long totals', () => {

@@ -6,6 +6,7 @@
 import type { HostState, NetworkState } from '../network';
 import { findUser, homeOf, writeFile, type LinuxState } from './fs';
 import { runLine, type PendingPython } from './shell';
+import { runSqlLine, sqlPrompt } from '../sql';
 
 export type { LinuxState, LinuxSpec, FsNode, LinuxUser, LinuxGroup, LinuxService, LinuxProcess, PythonRun } from './fs';
 export { createLinuxState, normalizePath, listDir, getNode, readFile, modeString, octal } from './fs';
@@ -41,6 +42,10 @@ function shortCwd(lx: LinuxState): string {
 export function linuxPrompt(host: HostState): string {
   const lx = host.linux!;
   if (lx.pending?.kind === 'password') return lx.pending.stage === 'new' ? 'New password: ' : 'Retype new password: ';
+  if (lx.pending?.kind === 'sql') {
+    const db = lx.databases?.[lx.pending.db];
+    if (db) return sqlPrompt(db);
+  }
   if (lx.pending?.kind === 'script') return '> ';
   return `${lx.user}@${lx.hostname}:${shortCwd(lx)}${lx.user === 'root' ? '#' : '$'} `;
 }
@@ -86,6 +91,7 @@ export function executeLinux(prev: NetworkState, hostId: string, rawLine: string
     remember(lx, output);
     return { network, output };
   }
+  if (lx.pending?.kind === 'sql') return sqlSession(network, h, lx, lx.pending.db, rawLine);
   const line = rawLine.replace(/\s+$/, '');
   if (lx.pending?.kind === 'script') {
     const text = lx.pending.text + '\n' + line;
@@ -106,6 +112,31 @@ export function executeLinux(prev: NetworkState, hostId: string, rawLine: string
  */
 function shellRefused(err: string[]): boolean {
   return err.some((l) => /: command not found$/.test(l) || /^bash: /.test(l));
+}
+
+/**
+ * A line typed at the psql prompt. The shell is not involved: the text is SQL until the
+ * learner types q, and a statement without a closing semicolon simply waits for more.
+ */
+function sqlSession(network: NetworkState, h: HostState, lx: LinuxState, name: string, rawLine: string): LinuxExecResult {
+  const db = lx.databases?.[name];
+  if (!db) {
+    lx.pending = undefined;
+    return { network, output: ['psql: lost connection to the server'] };
+  }
+  const line = rawLine.replace(/\s+$/, '');
+  const before = db.ran.length;
+  const r = runSqlLine(db, line);
+  if (line.trim()) {
+    h.commandHistory.push(line.trim());
+    lx.history.push(line.trim());
+    // A statement the server refused should not count as having been run.
+    if (db.ran.length > before || line.trim().startsWith('\\')) (h.acceptedHistory ??= []).push(line.trim());
+  }
+  const output = [...r.output];
+  if (r.quit) lx.pending = undefined;
+  remember(lx, output);
+  return { network, output: output.length ? [...output, ''] : [] };
 }
 
 function finish(network: NetworkState, h: HostState, lx: LinuxState, text: string, line: string, record: boolean): LinuxExecResult {

@@ -4,6 +4,7 @@
  * Pure data; the shell and the commands operate on it.
  */
 import { installApacheFiles, loadApache } from './apache';
+import { createSqlState, type SqlSpec, type SqlState } from '../sql';
 import { loadNginx } from './web';
 
 export interface FsNode {
@@ -90,7 +91,9 @@ export type LinuxPending =
   /** A multi-line command (heredoc, unfinished loop, trailing backslash) is being collected. */
   | { kind: 'script'; text: string }
   /** passwd is asking for a password. */
-  | { kind: 'password'; user: string; stage: 'new' | 'retype'; first?: string };
+  | { kind: 'password'; user: string; stage: 'new' | 'retype'; first?: string }
+  /** The learner is inside psql, so lines are SQL rather than shell commands. */
+  | { kind: 'sql'; db: string };
 
 export interface LinuxState {
   hostname: string;
@@ -119,6 +122,8 @@ export interface LinuxState {
   /** Lines typed at the shell (for `history`). */
   history: string[];
   web: WebState;
+  /** PostgreSQL databases on this host, by name. Absent when the server is not installed. */
+  databases?: Record<string, SqlState>;
 }
 
 export interface LinuxFileSpec {
@@ -158,6 +163,8 @@ export interface LinuxSpec {
   packages?: string[];
   /** Extra running processes, e.g. a runaway script to find and kill. */
   processes?: Array<{ user: string; cmd: string }>;
+  /** PostgreSQL databases to stand up, by name. Declaring any installs and starts the server. */
+  databases?: Record<string, SqlSpec>;
 }
 
 export const KNOWN_SERVICES: Record<string, { description: string; port?: number; package?: string }> = {
@@ -170,6 +177,7 @@ export const KNOWN_SERVICES: Record<string, { description: string; port?: number
   docker: { description: 'Docker Application Container Engine', package: 'docker.io' },
   ufw: { description: 'Uncomplicated firewall', package: 'ufw' },
   app: { description: 'NetLab demo application server', port: 8080, package: 'netlab-app' },
+  postgresql: { description: 'PostgreSQL RDBMS server', port: 5432, package: 'postgresql' },
 };
 
 /** Packages apt knows about and the service each one provides. */
@@ -582,6 +590,12 @@ export function createLinuxState(spec: LinuxSpec, hostName: string): LinuxState 
     state.fs[path] = f.link
       ? { type: 'link', content: '', target: f.link, owner: f.owner ?? defaultOwner, group: f.group ?? f.owner ?? defaultOwner, mode: f.mode ?? 0o777, mtime: 0 }
       : { type: 'file', content: f.content ?? '', owner: f.owner ?? defaultOwner, group: f.group ?? f.owner ?? defaultOwner, mode: f.mode ?? 0o644, mtime: 0 };
+  }
+  if (spec.databases) {
+    state.databases = {};
+    for (const [name, db] of Object.entries(spec.databases)) state.databases[name] = createSqlState({ ...db, database: name });
+    if (!state.packages.includes('postgresql')) state.packages.push('postgresql');
+    state.services.postgresql ??= { name: 'postgresql', description: KNOWN_SERVICES.postgresql.description, active: true, enabled: true, port: 5432 };
   }
   if (state.services.nginx?.active) loadNginx(state);
   if (state.services.apache2?.active) loadApache(state);

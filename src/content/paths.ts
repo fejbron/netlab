@@ -135,7 +135,87 @@ export const linuxPath: LearningPath = {
   },
 };
 
-export const paths: LearningPath[] = [ccnaPath, linuxPath];
+/**
+ * SQL has no single vendor exam the way CCNA and LFCS do, so these five areas are
+ * NetLab's own syllabus rather than a published blueprint, and the weights say how much
+ * of this path is spent on each rather than what any examiner asks. The language itself
+ * is standardised (ISO/IEC 9075); the dialect the labs speak is PostgreSQL's.
+ */
+export const SQL_DOMAINS: ExamDomain[] = [
+  { id: 'QL', title: 'Querying', weight: 30 },
+  { id: 'JA', title: 'Joins and Aggregation', weight: 25 },
+  { id: 'DM', title: 'Changing Data', weight: 15 },
+  { id: 'SD', title: 'Schema Design', weight: 20 },
+  { id: 'PS', title: 'Performance and Safety', weight: 10 },
+];
+
+export const SQL_TOPICS: Record<string, string> = {
+  'QL.1': 'Connect to a database and read its tables and columns',
+  'QL.2': 'Select columns and filter rows with WHERE',
+  'QL.3': 'Compare with =, <, IN, BETWEEN and LIKE',
+  'QL.4': 'Sort with ORDER BY, and trim with LIMIT and DISTINCT',
+  'QL.5': 'Handle NULL, the value that is not a value',
+  'QL.6': 'Compute expressions and name them with AS',
+  'JA.1': 'Join two tables on a matching column',
+  'JA.2': 'Keep unmatched rows with an outer join',
+  'JA.3': 'Summarise with count, sum, avg, min and max',
+  'JA.4': 'Group rows with GROUP BY and filter groups with HAVING',
+  'JA.5': 'Ask a question inside a question with subqueries and EXISTS',
+  'DM.1': 'Add rows with INSERT',
+  'DM.2': 'Change rows with UPDATE and remove them with DELETE',
+  'DM.3': 'Group changes into a transaction and undo them with ROLLBACK',
+  'SD.1': 'Create tables and choose column types',
+  'SD.2': 'Identify rows with a primary key',
+  'SD.3': 'Constrain data with NOT NULL, UNIQUE, DEFAULT and CHECK',
+  'SD.4': 'Relate tables with foreign keys and keep them consistent',
+  'SD.5': 'Change an existing table with ALTER TABLE',
+  'PS.1': 'Read a query plan with EXPLAIN',
+  'PS.2': 'Speed up a lookup with an index, and know its cost',
+  'PS.3': 'Save a query as a view',
+};
+
+export const sqlPath: LearningPath = {
+  id: 'sql',
+  title: 'SQL and Databases',
+  shortTitle: 'SQL',
+  scopeLabel: 'Relational database and SQL path',
+  levelLabel: 'Foundation',
+  eyebrow: 'PostgreSQL · in your browser',
+  summary: 'Learn SQL at a real psql prompt: read data with queries, combine and summarise it, change it safely, design the tables behind it, and make it fast.',
+  outcomes: [
+    'Connect to a database, read its structure, and answer questions with SELECT, WHERE and ORDER BY.',
+    'Handle NULL correctly, and know why comparing to it never matches.',
+    'Combine tables with inner and outer joins, and see which rows an inner join quietly drops.',
+    'Summarise data with GROUP BY and aggregate functions, and filter groups with HAVING.',
+    'Add, change and remove rows, and wrap risky changes in a transaction you can roll back.',
+    'Design tables with the right types, primary keys, foreign keys and constraints, so bad data is refused at the door.',
+    'Read a query plan, add an index that changes it, and save a query as a view.',
+  ],
+  audience: 'Anyone who needs to get answers out of a database: developers, analysts, and operations engineers who have so far been handed the queries.',
+  prerequisites: 'No database experience required. The labs open at a psql prompt, so no Linux knowledge is needed either.',
+  skillTags: ['SELECT', 'Joins', 'Aggregation', 'Transactions', 'Schema design', 'Indexes', 'PostgreSQL'],
+  blueprint: {
+    version: 'NetLab SQL syllabus v1',
+    reviewedAt: '2026-09-12',
+    facts: [
+      { label: 'Dialect', value: 'PostgreSQL' },
+      { label: 'Standard', value: 'ISO/IEC 9075' },
+      { label: 'Prompt', value: 'psql' },
+      { label: 'Areas', value: '5' },
+    ],
+    sources: [
+      { label: 'PostgreSQL tutorial', url: 'https://www.postgresql.org/docs/current/tutorial.html' },
+      { label: 'PostgreSQL SQL reference', url: 'https://www.postgresql.org/docs/current/sql-commands.html' },
+    ],
+    intro: 'SQL has no single certification the way networking and Linux do, so these five areas are NetLab’s own syllabus rather than an exam blueprint. The bars show how far you are through each area.',
+    weightingNote: 'The percentages say how much of this path is spent on each area. They are NetLab’s own editorial judgement and do not come from any examining body.',
+    trademarkNotice: 'NetLab is an independent, open-source simulator. PostgreSQL and the PostgreSQL logo are trademarks of the PostgreSQL Community Association of Canada. The labs are original and are not official PostgreSQL training.',
+    domains: SQL_DOMAINS,
+    topics: SQL_TOPICS,
+  },
+};
+
+export const paths: LearningPath[] = [ccnaPath, linuxPath, sqlPath];
 
 export function getPath(id: string): LearningPath | undefined {
   return paths.find((p) => p.id === id);

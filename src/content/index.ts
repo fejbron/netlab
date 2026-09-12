@@ -21,12 +21,18 @@ import { linuxScriptingLabs } from './labs/linux-scripting';
 import { linuxPythonLabs } from './labs/linux-python';
 import { linuxWebLabs } from './labs/linux-web';
 import { linuxApacheLabs } from './labs/linux-apache';
+import { sqlQueryLabs } from './labs/sql-query';
+import { sqlCombineLabs } from './labs/sql-combine';
+import { sqlChangeLabs } from './labs/sql-change';
+import { sqlDesignLabs } from './labs/sql-design';
+import { sqlPerformLabs } from './labs/sql-perform';
+import { sqlExamLabs } from './labs/sql-exams';
 import { paths } from './paths';
 
 export type { Lab, Module, Difficulty } from './types';
 export { BLUEPRINT, EXAM_DOMAINS, EXAM_TOPICS, PATH_OVERVIEW, domainCoverage, topicDomain, byTopicCode } from './blueprint';
 export type { ExamDomain, DomainCoverage } from './blueprint';
-export { paths, getPath, pathUrl, ccnaPath, linuxPath, LFCS_DOMAINS, LFCS_TOPICS } from './paths';
+export { paths, getPath, pathUrl, ccnaPath, linuxPath, sqlPath, LFCS_DOMAINS, LFCS_TOPICS, SQL_DOMAINS, SQL_TOPICS } from './paths';
 export type { LearningPath, PathBlueprint } from './paths';
 
 export const modules: Module[] = [
@@ -80,6 +86,13 @@ export const modules: Module[] = [
     examTopics: ['NW.3', 'NW.5', 'NW.6', 'NW.7', 'NW.8', 'OD.1', 'OD.2'],
   },
   { id: 'linux-python', pathId: 'linux', order: 6, title: 'Python on Linux', description: 'Run real Python in your browser: read files and JSON, generate device configuration, and audit the system.', examTopics: ['OD.5', 'NW.4'] },
+  // --- SQL
+  { id: 'sql-query', pathId: 'sql', order: 1, title: 'Query the Database', description: 'Read a database at the psql prompt: pick columns, filter rows, sort them, and handle the values that are missing.', examTopics: ['QL.1', 'QL.2', 'QL.3', 'QL.4', 'QL.5'] },
+  { id: 'sql-combine', pathId: 'sql', order: 2, title: 'Combine and Summarise', description: 'Join tables on their keys, keep the rows an inner join drops, summarise with GROUP BY, and ask a question inside a question.', examTopics: ['JA.1', 'JA.2', 'JA.3', 'JA.4', 'JA.5', 'QL.6'] },
+  { id: 'sql-change', pathId: 'sql', order: 3, title: 'Change the Data', description: 'Add, change and remove rows, meet the foreign key that refuses to orphan data, and undo a bad update with a transaction.', examTopics: ['DM.1', 'DM.2', 'DM.3'] },
+  { id: 'sql-design', pathId: 'sql', order: 4, title: 'Design the Schema', description: 'Build tables from scratch: choose types, identify rows with a primary key, refuse bad data with constraints, link tables with foreign keys, and alter a table already in use.', examTopics: ['SD.1', 'SD.2', 'SD.3', 'SD.4', 'SD.5'] },
+  { id: 'sql-perform', pathId: 'sql', order: 5, title: 'Make It Fast and Safe', description: 'Read a query plan, add an index that changes it, and save a query everyone keeps rewriting as a view.', examTopics: ['PS.1', 'PS.2', 'PS.3'] },
+  { id: 'sql-exams', pathId: 'sql', order: 6, title: 'SQL Exams', description: 'Two capstones: answer a trading report with joins, aggregates and subqueries, then design, constrain, fill and query a schema of your own.', examTopics: ['QL.2', 'JA.1', 'JA.3', 'JA.4', 'JA.5', 'SD.1', 'SD.3', 'SD.4'] },
 ];
 
 const pathOrder = (pathId: string) => paths.findIndex((p) => p.id === pathId);
@@ -106,6 +119,12 @@ export const labs: Lab[] = [
   ...linuxWebLabs,
   ...linuxApacheLabs,
   ...linuxPythonLabs,
+  ...sqlQueryLabs,
+  ...sqlCombineLabs,
+  ...sqlChangeLabs,
+  ...sqlDesignLabs,
+  ...sqlPerformLabs,
+  ...sqlExamLabs,
 ].sort((a, b) => {
   const ma = modules.find((m) => m.id === a.moduleId);
   const mb = modules.find((m) => m.id === b.moduleId);

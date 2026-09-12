@@ -19,6 +19,17 @@ function welcome(title: string, network: NetworkState, nodeId: string): TermLine
   const dev = network.devices[nodeId];
   const host = network.hosts[nodeId];
   if (host?.os === 'linux' && host.linux) {
+    // A database lab opens already connected, so greet the learner at the psql prompt
+    // rather than telling them about a shell they are not currently in.
+    const sql = host.linux.pending?.kind === 'sql' ? host.linux.databases?.[host.linux.pending.db] : undefined;
+    if (sql) {
+      return [
+        { kind: 'output', text: `Welcome to NetLab: ${title}` },
+        { kind: 'output', text: `psql (16.2, simulated) on ${host.linux.hostname}, connected to database "${sql.db.name}" as "${sql.user}".` },
+        { kind: 'output', text: 'Statements end with a semicolon. \\? lists the psql commands, \\dt the tables, \\q leaves for the shell.' },
+        { kind: 'output', text: '' },
+      ];
+    }
     return [
       { kind: 'output', text: `Welcome to NetLab: ${title}` },
       { kind: 'output', text: `Ubuntu 24.04.1 LTS on ${host.linux.hostname} (simulated). Logged in as ${host.linux.user}.` },
@@ -311,7 +322,25 @@ export default function LabPage() {
               onSubmit={onSubmit}
               onTab={(line) => (device ? tabComplete(device, line) : null)}
               onClear={() => setSession({ ...session, lines: { ...session.lines, [active]: [] } })}
-              modeLabel={pythonBusy ? pythonBusy : device ? (device.pendingInput ? 'password' : device.mode) : host?.os === 'linux' ? (host.linux?.pending?.kind === 'script' ? 'bash (continue…)' : host.linux?.pending?.kind === 'password' ? 'password' : 'bash') : 'pc'}
+              modeLabel={
+                pythonBusy
+                  ? pythonBusy
+                  : device
+                    ? device.pendingInput
+                      ? 'password'
+                      : device.mode
+                    : host?.os === 'linux'
+                      ? host.linux?.pending?.kind === 'sql'
+                        ? host.linux.databases?.[host.linux.pending.db]?.partial
+                          ? 'psql (continue…)'
+                          : 'psql'
+                        : host.linux?.pending?.kind === 'script'
+                          ? 'bash (continue…)'
+                          : host.linux?.pending?.kind === 'password'
+                            ? 'password'
+                            : 'bash'
+                      : 'pc'
+              }
             />
           </div>
         </section>

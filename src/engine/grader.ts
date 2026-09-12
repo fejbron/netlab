@@ -4,6 +4,7 @@ import { renderConfigBody } from './ios/show';
 import { channelStatus, ifaceIpv6, ospfInterfaces, ospfNeighbors, ospfRouterId, routingTable, stpRoot, stpVlan, type ChannelProtocol, type HostState, type NetworkState, type RouteEntry } from './network';
 import { getNode, normalizePath, octal } from './linux/fs';
 import { testNginx } from './linux/web';
+import { display as sqlDisplay, queryFor, type SqlState, type SqlType, type SqlValue } from './sql';
 import { enabledModules, enabledSites, testApache } from './linux/apache';
 import type { AclAddr, AclEntry, AclProtocol, ApiRequest, CliErrorKind, DeviceState, LineState, Mode, PortMode, SnmpMode, SyslogLevel } from './types';
 
@@ -132,7 +133,25 @@ export type Check = Base &
     | { type: 'apache-module'; name: string; enabled?: boolean }
     /** An Apache site is enabled (a2ensite), or disabled with enabled: false. */
     | { type: 'apache-site'; name: string; enabled?: boolean }
+    // --- SQL (device = the host holding the database)
+    /** A table exists, optionally with these columns and constraints. */
+    | { type: 'sql-table'; name: string; exists?: boolean; database?: string; rows?: number; columns?: Array<{ name: string; type?: SqlType; notNull?: boolean; primaryKey?: boolean; unique?: boolean; references?: string }>; absent?: string[] }
+    /** The grader runs `sql` against the learner's database and compares what comes back. */
+    | { type: 'sql-query'; sql: string; database?: string; rows?: SqlValue[][]; minRows?: number; maxRows?: number }
+    /**
+     * The learner ran some query that returned the right answer. The grader works out what
+     * that is by running `sql` itself, so any wording that gets there is accepted.
+     */
+    | { type: 'sql-answer'; sql: string; ordered?: boolean; database?: string }
+    /** The learner ran a statement matching this regex. */
+    | { type: 'sql-ran'; pattern: string; database?: string }
+    | { type: 'sql-index'; table: string; column: string; database?: string }
+    | { type: 'sql-view'; name: string; database?: string }
+    /** What the learner's most recent SELECT returned. */
+    | { type: 'sql-result'; rows?: number; columns?: string[]; contains?: string; database?: string }
   );
+
+const SQL_CHECKS = new Set(['sql-table', 'sql-query', 'sql-answer', 'sql-ran', 'sql-index', 'sql-view', 'sql-result']);
 
 const LINUX_CHECKS = new Set(['file', 'linux-user', 'linux-group', 'service', 'package', 'linux-hostname', 'shell-output', 'python-run', 'process', 'web-request', 'nginx-config', 'apache-config', 'apache-module', 'apache-site']);
 
@@ -324,8 +343,94 @@ function describe(check: Check): string {
       return `Apache configuration ${check.valid ? 'passes' : 'fails'} apache2ctl configtest${on}`;
     case 'apache-module':
       return `Apache module ${check.name} is ${check.enabled === false ? 'disabled' : 'enabled'}${on}`;
+    case 'sql-table':
+      return check.exists === false
+        ? 'Table ' + check.name + ' is gone'
+        : 'Table ' + check.name + ' exists' + (check.columns ? ' with ' + check.columns.map((c) => c.name).join(', ') : '') + (check.rows !== undefined ? ' and holds ' + check.rows + ' row' + (check.rows === 1 ? '' : 's') : '');
+    case 'sql-query':
+      return check.rows ? 'Query returns ' + check.rows.length + ' expected row' + (check.rows.length === 1 ? '' : 's') : check.minRows !== undefined ? 'Query returns at least ' + check.minRows + ' row' + (check.minRows === 1 ? '' : 's') : 'Query runs';
+    case 'sql-answer':
+      return 'A query returned the right answer';
+    case 'sql-ran':
+      return 'Ran a statement matching ' + readable(check.pattern);
+    case 'sql-index':
+      return 'An index covers ' + check.table + '.' + check.column;
+    case 'sql-view':
+      return 'View ' + check.name + ' exists';
+    case 'sql-result':
+      return 'The last query returned ' + (check.rows !== undefined ? check.rows + ' row' + (check.rows === 1 ? '' : 's') : check.columns ? check.columns.join(', ') : 'something') + (check.contains ? ' including ' + check.contains : '');
     case 'apache-site':
       return `Apache site ${check.name} is ${check.enabled === false ? 'disabled' : 'enabled'}${on}`;
+  }
+}
+
+/** Compare two result grids as text, so 12.50 and 12.5 are the same answer. */
+function sameRows(a: SqlValue[][], b: SqlValue[][]): boolean {
+  if (a.length !== b.length) return false;
+  const key = (rows: SqlValue[][]) => rows.map((r) => r.map(sqlDisplay).join('')).sort();
+  const x = key(a);
+  const y = key(b);
+  return x.every((v, i) => v === y[i]);
+}
+
+/** The same rows in the same order, for a question that asked for a particular ordering. */
+function orderedRows(a: SqlValue[][], b: SqlValue[][]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((row, i) => row.length === b[i].length && row.every((v, j) => sqlDisplay(v) === sqlDisplay(b[i][j])));
+}
+
+function evaluateSqlCheck(check: Check, state: SqlState): boolean {
+  const db = state.db;
+  switch (check.type) {
+    case 'sql-table': {
+      const t = db.tables[check.name];
+      if (check.exists === false) return !t;
+      if (!t) return false;
+      if (check.rows !== undefined && t.rows.length !== check.rows) return false;
+      if (check.absent?.some((name) => t.columns.some((c) => c.name === name))) return false;
+      for (const want of check.columns ?? []) {
+        const col = t.columns.find((c) => c.name === want.name);
+        if (!col) return false;
+        if (want.type !== undefined && col.type !== want.type) return false;
+        if (want.notNull !== undefined && Boolean(col.notNull) !== want.notNull) return false;
+        if (want.primaryKey !== undefined && Boolean(col.primaryKey) !== want.primaryKey) return false;
+        const unique = Boolean(col.unique) || Boolean(col.primaryKey);
+        if (want.unique !== undefined && unique !== want.unique) return false;
+        if (want.references !== undefined && col.references?.table !== want.references) return false;
+      }
+      return true;
+    }
+    case 'sql-query': {
+      const r = queryFor(state, check.sql);
+      if (!r) return false;
+      if (check.minRows !== undefined && r.rows.length < check.minRows) return false;
+      if (check.maxRows !== undefined && r.rows.length > check.maxRows) return false;
+      if (check.rows && !sameRows(r.rows, check.rows)) return false;
+      return true;
+    }
+    case 'sql-answer': {
+      const want = queryFor(state, check.sql);
+      if (!want) return false;
+      return state.answers.some((a) => (check.ordered ? orderedRows(a.rows, want.rows) : sameRows(a.rows, want.rows)));
+    }
+    case 'sql-ran': {
+      const re = new RegExp(check.pattern, 'i');
+      return state.ran.some((s) => re.test(s));
+    }
+    case 'sql-index':
+      return Object.values(db.indexes).some((i) => i.table === check.table && i.columns.includes(check.column));
+    case 'sql-view':
+      return Boolean(db.views[check.name]);
+    case 'sql-result': {
+      const last = state.lastResult;
+      if (!last) return false;
+      if (check.rows !== undefined && last.rows.length !== check.rows) return false;
+      if (check.columns && !check.columns.every((c) => last.columns.includes(c))) return false;
+      if (check.contains !== undefined && !last.rows.some((r) => r.some((v) => sqlDisplay(v) === check.contains))) return false;
+      return true;
+    }
+    default:
+      return false;
   }
 }
 
@@ -475,6 +580,14 @@ function evaluateCheckInner(check: Check, net: NetworkState): boolean | undefine
   if (check.type === 'command' && check.device && net.hosts[check.device]) {
     const re = new RegExp(check.pattern, 'i');
     return ranCommands(net.hosts[check.device]).some((c) => re.test(c));
+  }
+  if (SQL_CHECKS.has(check.type)) {
+    const h = net.hosts[check.device ?? ''] ?? Object.values(net.hosts).find((x) => x.linux?.databases);
+    const dbs = h?.linux?.databases;
+    if (!dbs) return false;
+    const named = 'database' in check ? check.database : undefined;
+    const state = named ? dbs[named] : Object.values(dbs)[0];
+    return state ? evaluateSqlCheck(check, state) : false;
   }
   if (LINUX_CHECKS.has(check.type)) {
     const h = net.hosts[check.device ?? ''] ?? Object.values(net.hosts).find((x) => x.os === 'linux');

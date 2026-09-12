@@ -298,6 +298,130 @@ describe('reference solutions pass', () => {
     ],
   });
 
+  // SQL labs open at the psql prompt on db1, so every line below is SQL unless it starts with a backslash.
+  Object.assign(solutions, {
+    'db-01-first-query': ['db1: \\dt', 'db1: \\d products', 'db1: SELECT * FROM products;', 'db1: SELECT name, price FROM products;'],
+    'db-02-choose-rows': [
+      "db1: SELECT name FROM customers WHERE city = 'London';",
+      'db1: SELECT name, price FROM products WHERE price > 50;',
+      "db1: SELECT name FROM products WHERE category IN ('coffee', 'tableware');",
+      "db1: SELECT name FROM products WHERE name LIKE '%Beans%';",
+      "db1: SELECT id FROM orders WHERE placed BETWEEN '2026-02-01' AND '2026-02-28';",
+    ],
+    'db-03-sort-and-limit': [
+      'db1: SELECT name, price FROM products ORDER BY price;',
+      'db1: SELECT name, price FROM products ORDER BY price DESC LIMIT 3;',
+      'db1: SELECT DISTINCT category FROM products;',
+      'db1: SELECT name, joined FROM customers ORDER BY joined DESC LIMIT 3;',
+    ],
+    'db-04-missing-values': [
+      'db1: SELECT name FROM customers WHERE email = NULL;',
+      'db1: SELECT name FROM customers WHERE email IS NULL;',
+      'db1: SELECT name FROM customers WHERE email IS NOT NULL;',
+      'db1: SELECT count(*) FROM customers WHERE city IS NOT NULL;',
+      "db1: SELECT name, coalesce(city, 'unknown') FROM customers;",
+    ],
+    'db-05-join-two-tables': [
+      'db1: SELECT c.name, o.id, o.placed FROM customers c JOIN orders o ON o.customer_id = c.id;',
+      'db1: SELECT o.id, p.name, i.quantity FROM orders o JOIN order_items i ON i.order_id = o.id JOIN products p ON p.id = i.product_id;',
+      "db1: SELECT p.name FROM customers c JOIN orders o ON o.customer_id = c.id JOIN order_items i ON i.order_id = o.id JOIN products p ON p.id = i.product_id WHERE c.name = 'Ada Lovelace';",
+    ],
+    'db-06-keep-every-row': [
+      'db1: SELECT DISTINCT c.name FROM customers c JOIN orders o ON o.customer_id = c.id;',
+      'db1: SELECT c.name, o.id FROM customers c LEFT JOIN orders o ON o.customer_id = c.id;',
+      'db1: SELECT c.name FROM customers c LEFT JOIN orders o ON o.customer_id = c.id WHERE o.id IS NULL;',
+    ],
+    'db-07-summarise': [
+      'db1: SELECT category, count(*) FROM products GROUP BY category;',
+      'db1: SELECT category, round(avg(price), 2) FROM products GROUP BY category;',
+      'db1: SELECT o.id, sum(i.quantity * i.unit_price) FROM orders o JOIN order_items i ON i.order_id = o.id GROUP BY o.id;',
+      'db1: SELECT customer_id FROM orders GROUP BY customer_id HAVING count(*) > 1;',
+    ],
+    'db-08-questions-inside-questions': [
+      'db1: SELECT name FROM products WHERE id NOT IN (SELECT product_id FROM order_items);',
+      "db1: SELECT name FROM customers WHERE id IN (SELECT customer_id FROM orders WHERE placed BETWEEN '2026-02-01' AND '2026-02-28');",
+      'db1: SELECT name FROM products WHERE price > (SELECT avg(price) FROM products);',
+      'db1: SELECT name FROM customers c WHERE NOT EXISTS (SELECT 1 FROM orders o WHERE o.customer_id = c.id);',
+    ],
+    'db-09-add-rows': [
+      "db1: INSERT INTO customers (name, city, email, joined) VALUES ('Gus Weber', 'Bristol', 'gus@example.com', '2026-03-05');",
+      "db1: INSERT INTO products (sku, name, category, price, stock) VALUES ('TMP-700', 'Milk Thermometer', 'appliances', 12.75, 15);",
+      "db1: INSERT INTO products (sku, name, category, price, stock) VALUES ('CUP-402', 'Cappuccino Cup', 'tableware', 5.75, 60), ('SAU-403', 'Saucer', 'tableware', 3.25, 80);",
+    ],
+    'db-10-change-and-remove': [
+      "db1: UPDATE products SET price = 259.00 WHERE sku = 'ESP-100';",
+      "db1: UPDATE orders SET status = 'shipped' WHERE id = 5;",
+      "db1: DELETE FROM products WHERE sku = 'FLT-500';",
+      "db1: DELETE FROM customers WHERE name = 'Ada Lovelace';",
+    ],
+    'db-11-all-or-nothing': [
+      'db1: BEGIN;',
+      'db1: UPDATE products SET price = round(price * 1.1, 2);',
+      'db1: SELECT name, price FROM products;',
+      'db1: ROLLBACK;',
+      'db1: BEGIN;',
+      "db1: UPDATE products SET price = round(price * 1.1, 2) WHERE category = 'coffee';",
+      'db1: COMMIT;',
+    ],
+    'db-12-create-a-table': [
+      "db1: CREATE TABLE suppliers (id serial PRIMARY KEY, name text NOT NULL, country text NOT NULL DEFAULT 'UK', active boolean NOT NULL DEFAULT true, since date);",
+      "db1: INSERT INTO suppliers (name, country, since) VALUES ('Bean Bros', 'UK', '2025-01-15');",
+      "db1: INSERT INTO suppliers (name, country, since) VALUES ('Milano Machines', 'Italy', '2025-08-02');",
+      'db1: \\d suppliers',
+    ],
+    'db-13-keys-and-rules': [
+      'db1: CREATE TABLE coupons (code text PRIMARY KEY, percent integer NOT NULL CHECK (percent > 0 AND percent <= 50), expires date NOT NULL, uses integer NOT NULL DEFAULT 0);',
+      "db1: INSERT INTO coupons (code, percent, expires) VALUES ('SPRING10', 10, '2026-06-30');",
+      "db1: INSERT INTO coupons (code, percent, expires) VALUES ('SPRING10', 15, '2026-07-31');",
+      "db1: INSERT INTO coupons (code, percent, expires) VALUES ('HALFOFF', 90, '2026-06-30');",
+    ],
+    'db-14-link-tables': [
+      'db1: CREATE TABLE shipments (id serial PRIMARY KEY, order_id integer NOT NULL REFERENCES orders (id), courier text NOT NULL, sent date NOT NULL);',
+      "db1: INSERT INTO shipments (order_id, courier, sent) VALUES (1, 'DPD', '2026-01-07');",
+      "db1: INSERT INTO shipments (order_id, courier, sent) VALUES (99, 'DPD', '2026-01-07');",
+    ],
+    'db-15-change-the-shape': [
+      'db1: ALTER TABLE customers ADD COLUMN phone text;',
+      'db1: ALTER TABLE customers ADD COLUMN loyalty text NOT NULL;',
+      "db1: ALTER TABLE customers ADD COLUMN loyalty text NOT NULL DEFAULT 'bronze';",
+      'db1: ALTER TABLE customers RENAME COLUMN joined TO signed_up;',
+      'db1: ALTER TABLE customers DROP COLUMN phone;',
+    ],
+    'db-16-see-the-plan': [
+      "db1: EXPLAIN SELECT * FROM orders WHERE placed = '2026-02-14';",
+      "db1: EXPLAIN SELECT * FROM products WHERE category = 'coffee';",
+      "db1: EXPLAIN ANALYZE SELECT * FROM orders WHERE placed = '2026-02-14';",
+    ],
+    'db-17-add-an-index': [
+      'db1: CREATE INDEX orders_placed_idx ON orders (placed);',
+      "db1: EXPLAIN SELECT * FROM orders WHERE placed = '2026-02-14';",
+      'db1: CREATE INDEX products_category_idx ON products (category);',
+      'db1: \\di',
+    ],
+    'db-18-save-a-query': [
+      'db1: CREATE VIEW order_totals AS SELECT o.id, c.name AS customer, sum(i.quantity * i.unit_price) AS total FROM orders o JOIN customers c ON c.id = o.customer_id JOIN order_items i ON i.order_id = o.id GROUP BY o.id, c.name;',
+      'db1: SELECT * FROM order_totals ORDER BY total DESC;',
+      'db1: SELECT * FROM order_totals WHERE total > 100;',
+    ],
+    'db-19-exam-the-monthly-report': [
+      "db1: SELECT sum(i.quantity * i.unit_price) FROM orders o JOIN order_items i ON i.order_id = o.id WHERE o.status = 'shipped';",
+      "db1: SELECT c.name, sum(i.quantity * i.unit_price) AS spend FROM customers c JOIN orders o ON o.customer_id = c.id JOIN order_items i ON i.order_id = o.id WHERE o.status <> 'cancelled' GROUP BY c.name ORDER BY spend DESC LIMIT 3;",
+      'db1: SELECT name FROM products WHERE id NOT IN (SELECT product_id FROM order_items);',
+      'db1: SELECT category, round(avg(price), 2) FROM products GROUP BY category HAVING avg(price) > 20;',
+      'db1: SELECT c.name FROM customers c LEFT JOIN orders o ON o.customer_id = c.id WHERE o.id IS NULL;',
+    ],
+    'db-20-exam-design-a-schema': [
+      'db1: CREATE TABLE warehouses (id serial PRIMARY KEY, code text NOT NULL UNIQUE, city text NOT NULL);',
+      'db1: CREATE TABLE stock_moves (id serial PRIMARY KEY, product_id integer NOT NULL REFERENCES products (id), warehouse_id integer NOT NULL REFERENCES warehouses (id), moved date NOT NULL, quantity integer NOT NULL CHECK (quantity <> 0));',
+      "db1: INSERT INTO warehouses (code, city) VALUES ('LDN', 'London'), ('BRS', 'Bristol');",
+      "db1: INSERT INTO stock_moves (product_id, warehouse_id, moved, quantity) VALUES (1, 1, '2026-03-02', 10), (3, 1, '2026-03-02', 25), (2, 2, '2026-03-03', -4);",
+      "db1: INSERT INTO warehouses (code, city) VALUES ('LDN', 'Leeds');",
+      "db1: INSERT INTO stock_moves (product_id, warehouse_id, moved, quantity) VALUES (1, 1, '2026-03-04', 0);",
+      "db1: INSERT INTO stock_moves (product_id, warehouse_id, moved, quantity) VALUES (999, 1, '2026-03-04', 5);",
+      'db1: SELECT w.code, sum(m.quantity) FROM warehouses w JOIN stock_moves m ON m.warehouse_id = w.id GROUP BY w.code;',
+    ],
+  });
+
   const HOME = '/home/student';
   const fakes: Record<string, Fake> = {
     'lx-20-hello-python': (p) => ({ stdout: p.argv[0] === '-c' ? 'Hello from Python\n' : 'Hello, NetLab!\n' }),
