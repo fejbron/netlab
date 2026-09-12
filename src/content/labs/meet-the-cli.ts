@@ -197,19 +197,27 @@ export const meetTheCliLabs: Lab[] = [
     estimatedMinutes: 5,
     description: 'Learn the difference between running and startup configuration, then save your changes.',
     scenario:
-      'You have spent the afternoon configuring a switch. A maintenance window tonight includes a power cycle. If you do not copy the running configuration to NVRAM, everything you did will be lost.\n\nSet the hostname to Floor2-SW1, look at the startup configuration before and after saving, and make sure the change survives a reboot.',
+      'You have spent the afternoon configuring a switch. A maintenance window tonight includes a power cycle. If you do not copy the running configuration to NVRAM, everything you did will be lost.\n\nThe switch keeps two copies. show running-config prints the one in memory, which is what you have been editing. show startup-config prints the one in NVRAM, which is what the switch reloads from.\n\nSet the hostname to Floor2-SW1 and read both: memory has the new name, NVRAM has nothing yet. Save, then read the startup configuration again and you will find the same lines the running configuration shows.',
     concepts: ['Running configuration', 'Startup configuration', 'NVRAM', 'write memory'],
     hints: [
       'Set the hostname in global configuration mode, then return to privileged mode.',
-      'show startup-config before saving reports that no startup config is present.',
+      'show running-config prints what is in memory right now, hostname line included.',
+      'show startup-config before saving reports that no startup config is present: nothing has reached NVRAM yet.',
       'write memory (or copy running-config startup-config) saves the running config to NVRAM.',
-      'Run show startup-config again and confirm the hostname line is there.',
+      'Run show startup-config once more. Under the "Using ... bytes" line it now prints the same configuration show running-config does.',
     ],
     createState: () => office(),
     objectives: [
       { id: 'hostname', label: 'Set the hostname to Floor2-SW1', checks: [{ type: 'hostname', equals: 'Floor2-SW1' }] },
-      { id: 'inspect', label: 'Inspect the startup configuration', checks: [{ type: 'command', pattern: '^(do )?show startup-config$' }] },
-      { id: 'save', label: 'Save the configuration', checks: [{ type: 'command', pattern: '^(write( memory)?|copy running-config startup-config)$', label: "Run 'write memory' or 'copy running-config startup-config'" }, { type: 'saved', label: 'Startup config matches the running config' }] },
+      {
+        id: 'inspect',
+        label: 'Read both copies of the configuration',
+        checks: [
+          { type: 'command', pattern: '^(do )?show running-config$', label: 'show running-config: what is in memory' },
+          { type: 'command', pattern: '^(do )?show startup-config$', label: 'show startup-config: what is in NVRAM' },
+        ],
+      },
+      { id: 'save', label: 'Save the configuration', checks: [{ type: 'command', pattern: '^(write( memory)?|copy running-config startup-config)$', label: "Run 'write memory' or 'copy running-config startup-config'" }, { type: 'saved', label: 'NVRAM now holds what is in memory' }] },
     ],
   },
   {
