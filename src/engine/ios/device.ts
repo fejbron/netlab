@@ -141,6 +141,7 @@ function run(state: DeviceState, network: NetworkState, nodeId: string, rawLine:
   switch (res.kind) {
     case 'ok': {
       state.canonicalHistory.push(canonicalPrefix + res.canonical);
+      (state.acceptedHistory ??= []).push(line);
       const output = res.def.run({ state, network, nodeId }, res.args) ?? [];
       noteMode(state);
       return output.length ? [...output, ''] : [];
@@ -260,6 +261,7 @@ function baseDevice(id: string, hostname: string, deviceType: DeviceState['devic
     ntpServers: [],
     startupConfig: null,
     commandHistory: [],
+    acceptedHistory: [],
     canonicalHistory: [],
     modesVisited: ['user'],
     errorsSeen: [],

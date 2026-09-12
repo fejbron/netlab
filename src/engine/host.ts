@@ -133,6 +133,8 @@ export function executeHost(prev: NetworkState, hostId: string, rawLine: string)
   if (!line) return { network, output: [] };
   h.commandHistory.push(line);
   const [cmd, ...args] = splitArgs(line);
+  /** Cleared by any branch that could not carry the command out. */
+  let accepted = true;
   const c = cmd.toLowerCase();
   const opt = args[0]?.toLowerCase();
   let output: string[];
@@ -141,12 +143,24 @@ export function executeHost(prev: NetworkState, hostId: string, rawLine: string)
     else if (opt === '/all') output = ipconfig(h, true);
     else if (opt === '/renew') output = renew(network, h);
     else if (opt === '/release') output = release(network, h);
-    else output = [`Error: unrecognized or incomplete command line.`, '', 'USAGE: ipconfig [/all | /renew | /release]'];
-  } else if (c === 'ping') output = args[0] ? pingOut(network, h, args[args.length - 1]) : ['Usage: ping <ip>'];
-  else if (c === 'tracert' || c === 'traceroute') output = args[0] ? tracert(network, h, args[args.length - 1]) : ['Usage: tracert <ip>'];
+    else {
+      accepted = false;
+      output = [`Error: unrecognized or incomplete command line.`, '', 'USAGE: ipconfig [/all | /renew | /release]'];
+    }
+  } else if (c === 'ping') {
+    accepted = Boolean(args[0]);
+    output = accepted ? pingOut(network, h, args[args.length - 1]) : ['Usage: ping <ip>'];
+  } else if (c === 'tracert' || c === 'traceroute') {
+    accepted = Boolean(args[0]);
+    output = accepted ? tracert(network, h, args[args.length - 1]) : ['Usage: tracert <ip>'];
+  }
   else if (c === 'curl') output = curl(network, h, args).output;
   else if (c === 'help' || c === '?') output = HELP;
   else if (c === 'cls' || c === 'clear') output = [];
-  else output = [`'${cmd}' is not recognized as an internal or external command,`, 'operable program or batch file.'];
+  else {
+    accepted = false;
+    output = [`'${cmd}' is not recognized as an internal or external command,`, 'operable program or batch file.'];
+  }
+  if (accepted) (h.acceptedHistory ??= []).push(line);
   return { network, output: output.length ? [...output, ''] : [] };
 }

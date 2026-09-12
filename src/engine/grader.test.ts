@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isLabUnlocked, labNetwork, labs } from '../content';
-import { grade } from './grader';
+import { evaluateCheck, grade } from './grader';
 import { applyPythonResult, executeHost, executeOn, type NetworkState, type PendingPython, type PythonResult } from './index';
 
 /**
@@ -66,7 +66,7 @@ describe('reference solutions pass', () => {
     'cli-03-learning-from-errors': ['en', 'shwo running-config', 'sh st', 'conf t', 'hostname', 'do show running-config'],
     'cli-04-find-your-way-around': ['en', 'conf t', 'int g0/1', 'exit', 'vlan 10', 'end'],
     'cli-05-read-the-switch': ['en', 'show vlan brief', 'show interfaces status', 'show running-config', 'show ip interface brief'],
-    'cli-06-save-your-work': ['en', 'conf t', 'hostname Floor2-SW1', 'end', 'show startup-config', 'write memory', 'show startup-config'],
+    'cli-06-save-your-work': ['en', 'conf t', 'hostname Floor2-SW1', 'end', 'show running-config', 'show startup-config', 'write memory', 'show startup-config'],
     'cli-07-lock-the-door': ['en', 'conf t', 'enable secret cisco123', 'line con 0', 'password conpass', 'login', 'line vty 0 4', 'password vtypass', 'login', 'end', 'show running-config'],
     'cli-08-who-gets-in': ['en', 'conf t', 'username admin privilege 15 secret Adm1n-Lab', 'line vty 0 4', 'login local', 'transport input ssh', 'end', 'write memory'],
     'cli-09-type-smart': ['en', 'conf t', 'int g0/1', 'do sh run', 'end', 'show running-config'],
@@ -322,4 +322,48 @@ describe('reference solutions pass', () => {
       expect(result.score).toBe(100);
     });
   }
+});
+
+describe('only commands the device actually ran count', () => {
+  const cli = labs.find((l) => l.id === 'cli-01-first-contact')!;
+  const startCli = () => labNetwork(cli);
+  const ranIt = (net: NetworkState, pattern: string, device?: string) => evaluateCheck({ type: 'command', pattern, ...(device ? { device } : {}) }, net);
+
+  it('ignores a command the CLI rejected, however close to the real one it looks', () => {
+    expect(ranIt(run(startCli(), 'enable', 'show ip intttterface brief'), '^(do )?show ip int')).toBe(false);
+    // The same pattern is met as soon as the command actually runs.
+    expect(ranIt(run(startCli(), 'enable', 'show ip interface brief'), '^(do )?show ip int')).toBe(true);
+  });
+
+  it('counts an abbreviation, by what was typed and by what it expanded to', () => {
+    const net = run(startCli(), 'enable', 'sh ip int br');
+    expect(ranIt(net, '^(do )?show ip interface brief$')).toBe(true);
+    expect(ranIt(net, '^sh ip int br$')).toBe(true);
+  });
+
+  it('ignores a command the CLI called incomplete', () => {
+    const net = run(startCli(), 'enable', 'configure');
+    expect(net.devices[net.primary].commandHistory).toContain('configure');
+    expect(ranIt(net, '^configure')).toBe(false);
+  });
+
+  it('keeps every attempt in the history the device prints', () => {
+    // "show history" is meant to be a faithful record, mistakes included.
+    const net = run(startCli(), 'enable', 'show ip intttterface brief');
+    expect(net.devices[net.primary].commandHistory).toContain('show ip intttterface brief');
+    expect(net.devices[net.primary].acceptedHistory).not.toContain('show ip intttterface brief');
+  });
+
+  it('ignores a name the Linux shell could not find', () => {
+    const lab = labs.find((l) => l.id.startsWith('lx-'))!;
+    const host = Object.values(labNetwork(lab).hosts).find((h) => h.os === 'linux')!.id;
+    expect(ranIt(run(labNetwork(lab), host + ': lss -l /etc'), '^ls', host)).toBe(false);
+    expect(ranIt(run(labNetwork(lab), host + ': ls -l /etc'), '^ls', host)).toBe(true);
+  });
+
+  it('still grades a session saved before the engine recorded this', () => {
+    const net = run(startCli(), 'enable', 'show ip intttterface brief');
+    delete net.devices[net.primary].acceptedHistory;
+    expect(ranIt(net, '^(do )?show ip int')).toBe(true);
+  });
 });

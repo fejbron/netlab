@@ -342,8 +342,15 @@ export interface DeviceState {
   /** Text snapshot of the config body at the last save, or null when never saved. */
   startupConfig: string | null;
 
-  /** Raw lines typed by the learner, in order. */
+  /** Raw lines typed by the learner, in order, mistakes included: this is what "show history" prints. */
   commandHistory: string[];
+  /**
+   * The subset of those lines the CLI actually accepted and ran. Grading reads this
+   * so a command the device rejected cannot tick an objective. Optional because a
+   * session saved before it existed has no such record; grading falls back to
+   * commandHistory for those rather than wiping out progress already made.
+   */
+  acceptedHistory?: string[];
   /** Fully expanded command forms (e.g. "conf t" -> "configure terminal"), in order. */
   canonicalHistory: string[];
   /** Every mode the learner has been in, for grading. */

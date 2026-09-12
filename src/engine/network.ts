@@ -37,7 +37,10 @@ export interface HostState {
   prefix6?: number;
   gateway6?: string;
   mac: string;
+  /** Raw lines typed at this host, mistakes included. */
   commandHistory: string[];
+  /** The subset the shell actually ran; see DeviceState.acceptedHistory. */
+  acceptedHistory?: string[];
   pings: PingRecord[];
   /** A Linux server with a shell instead of the Windows-style PC terminal. */
   os?: 'linux';
@@ -440,7 +443,7 @@ export function fromSwitch(sw: DeviceState): NetworkState {
   const hosts: Record<string, HostState> = {};
   const links: Link[] = [];
   for (const n of sw.neighbors) {
-    hosts[n.name] = { kind: 'host', id: n.name, name: n.name, deviceKind: n.kind, ip: n.ip, mask: n.mask, mac: n.mac, commandHistory: [], pings: [] };
+    hosts[n.name] = { kind: 'host', id: n.name, name: n.name, deviceKind: n.kind, ip: n.ip, mask: n.mask, mac: n.mac, commandHistory: [], acceptedHistory: [], pings: [] };
     links.push({ a: { node: sw.id, iface: n.interface }, b: { node: n.name, iface: HOST_IFACE } });
   }
   const net: NetworkState = { primary: sw.id, devices: { [sw.id]: sw }, hosts, links };
@@ -491,7 +494,7 @@ export function buildNetwork(spec: NetworkSpec): NetworkState {
     hosts[h.id] = {
       kind: 'host', id: h.id, name: h.name ?? h.id, deviceKind: h.kind ?? (h.linux ? 'server' : 'pc'), ip: h.ip, mask: h.mask, gateway: h.gateway, dns: h.dns, dhcp: h.dhcp,
       ip6: v6 ? normalizeIpv6(v6[0]) ?? undefined : undefined, prefix6: v6 ? Number(v6[1] ?? 64) : undefined, gateway6: h.gateway6 ? normalizeIpv6(h.gateway6) ?? undefined : undefined,
-      mac: `0011.22bb.${String(idx + 1).padStart(4, '0')}`, commandHistory: [], pings: [],
+      mac: `0011.22bb.${String(idx + 1).padStart(4, '0')}`, commandHistory: [], acceptedHistory: [], pings: [],
       ...(h.linux ? { os: 'linux' as const, linux: createLinuxState(h.linux === true ? {} : h.linux, h.name ?? h.id) } : {}),
     };
   });

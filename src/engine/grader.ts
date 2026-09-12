@@ -452,6 +452,15 @@ function deviceFor(check: Check, net: NetworkState): DeviceState | undefined {
   return net.devices[check.device ?? net.primary];
 }
 
+/**
+ * The lines that actually ran, for matching a "command" check against. A session saved
+ * before the engine recorded this falls back to everything typed, so resuming one does
+ * not silently un-tick objectives the learner has already met.
+ */
+function ranCommands(owner: { acceptedHistory?: string[]; commandHistory: string[] }): string[] {
+  return owner.acceptedHistory ?? owner.commandHistory;
+}
+
 export function evaluateCheck(check: Check, net: NetworkState): boolean {
   return evaluateCheckInner(check, net) ?? false;
 }
@@ -465,7 +474,7 @@ function evaluateCheckInner(check: Check, net: NetworkState): boolean | undefine
   }
   if (check.type === 'command' && check.device && net.hosts[check.device]) {
     const re = new RegExp(check.pattern, 'i');
-    return net.hosts[check.device].commandHistory.some((c) => re.test(c));
+    return ranCommands(net.hosts[check.device]).some((c) => re.test(c));
   }
   if (LINUX_CHECKS.has(check.type)) {
     const h = net.hosts[check.device ?? ''] ?? Object.values(net.hosts).find((x) => x.os === 'linux');
@@ -488,8 +497,9 @@ function evaluateCheckInner(check: Check, net: NetworkState): boolean | undefine
   if (!state) return false;
   switch (check.type) {
     case 'command': {
+      // canonicalHistory only ever holds commands that ran, so it needs no filtering.
       const re = new RegExp(check.pattern, 'i');
-      return state.canonicalHistory.some((c) => re.test(c)) || state.commandHistory.some((c) => re.test(c));
+      return state.canonicalHistory.some((c) => re.test(c)) || ranCommands(state).some((c) => re.test(c));
     }
     case 'mode':
       return state.modesVisited.includes(check.mode);

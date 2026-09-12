@@ -90,22 +90,32 @@ export function executeLinux(prev: NetworkState, hostId: string, rawLine: string
   if (lx.pending?.kind === 'script') {
     const text = lx.pending.text + '\n' + line;
     lx.pending = undefined;
-    return finish(network, h, lx, text, line);
+    return finish(network, h, lx, text, line, false);
   }
   if (!line.trim()) return { network, output: [] };
   h.commandHistory.push(line.trim());
   lx.history.push(line.trim());
   if (lx.history.length > 500) lx.history.shift();
-  return finish(network, h, lx, line, line);
+  return finish(network, h, lx, line, line, true);
 }
 
-function finish(network: NetworkState, h: HostState, lx: LinuxState, text: string, line: string): LinuxExecResult {
+/**
+ * True when the shell itself refused the line: an unknown command name, or source it
+ * could not parse. A command that ran and complained (`ls: cannot access ...`) is not
+ * refused; it did what the learner asked and reported the result.
+ */
+function shellRefused(err: string[]): boolean {
+  return err.some((l) => /: command not found$/.test(l) || /^bash: /.test(l));
+}
+
+function finish(network: NetworkState, h: HostState, lx: LinuxState, text: string, line: string, record: boolean): LinuxExecResult {
   const r = runLine({ state: lx, network, hostId: h.id }, text);
   if ('incomplete' in r) {
     lx.pending = { kind: 'script', text };
     return { network, output: [] };
   }
   const output = [...r.out, ...r.err];
+  if (record && !shellRefused(r.err)) (h.acceptedHistory ??= []).push(line.trim());
   remember(lx, output);
   void line;
   return r.pending ? { network, output, pending: r.pending } : { network, output };
