@@ -8,10 +8,14 @@ import { useAuth } from '../lib/auth';
 import { fetchLeaderboard, rankEntries, type RankedBy, type RankedEntry } from '../lib/leaderboard';
 import { DIFFICULTY_POINTS, EXAM_MULTIPLIER, formatPoints, maxTotalPoints } from '../lib/points';
 
-/** The tabs across the top: every path on its own, plus one combined board. */
-const SCOPES = [{ id: 'all', title: 'All paths' }, ...paths.map((p) => ({ id: p.id, title: p.shortTitle }))];
+/** One tab per learning path. Each path is ranked on its own; there is no combined board. */
+const SCOPES = paths.map((p) => ({ id: p.id, title: p.shortTitle }));
 
-/** How many labs and points a scope is worth, so the totals match the board being shown. */
+/**
+ * How many labs and points a board is worth, so the totals match what is being shown.
+ * 'all' only comes up when the database cannot split the board and every path has been
+ * counted together, which the page says plainly when it happens.
+ */
 function scale(scope: string): { labs: number; points: number } {
   const list = scope === 'all' ? labs : labsForPath(scope);
   return { labs: list.length, points: maxTotalPoints(list) };
@@ -26,7 +30,7 @@ function Rank({ n }: { n: number }) {
 
 export default function LeaderboardPage() {
   const auth = useAuth();
-  const [scope, setScope] = useState('all');
+  const [scope, setScope] = useState(SCOPES[0].id);
   const [entries, setEntries] = useState<RankedEntry[] | null>(null);
   const [rankedBy, setRankedBy] = useState<RankedBy>('points');
   const [shown, setShown] = useState('all');
@@ -38,7 +42,7 @@ export default function LeaderboardPage() {
     let cancelled = false;
     setEntries(null);
     setError(null);
-    fetchLeaderboard(50, scope === 'all' ? undefined : scope)
+    fetchLeaderboard(50, scope)
       .then((r) => {
         if (cancelled) return;
         setRankedBy(r.rankedBy);
@@ -68,9 +72,9 @@ export default function LeaderboardPage() {
       <main className="mx-auto w-full max-w-3xl flex-1 overflow-y-auto px-4 pb-16 pt-10">
         <p className="label text-accent">
           <Icon g={NF.trophy} className="mr-1.5" />
-          Top learners
+          Leaderboard
         </p>
-        <h1 className="display mt-2 text-4xl text-fg-bright">{pathTitle ?? 'Leaderboard'}</h1>
+        <h1 className="display mt-2 text-4xl text-fg-bright">{pathTitle ?? 'Top learners'}</h1>
         <div className="mt-4 flex flex-wrap gap-1 rounded-xl bg-surface-2 p-1 text-sm">
           {SCOPES.map((s) => (
             <button
