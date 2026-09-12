@@ -24,6 +24,10 @@ export type RankedBy = 'points' | 'stars';
 export interface LeaderboardResult {
   entries: LeaderboardEntry[];
   rankedBy: RankedBy;
+  /** The path this board covers, or 'all' when every path counts towards one ranking. */
+  scope: string;
+  /** Set when a path board was asked for and the database could not provide one. */
+  wantedPath?: string;
 }
 
 const total = (e: LeaderboardEntry, by: RankedBy) => (by === 'points' ? e.totalPoints : e.totalStars);
@@ -68,25 +72,46 @@ function missingPointsColumn(error: { code?: string; message?: string }): boolea
   return error.code === '42703' || /total_points/.test(error.message ?? '');
 }
 
-export async function fetchLeaderboard(limit = 50): Promise<LeaderboardResult> {
-  if (!supabase) return { entries: [], rankedBy: 'points' };
-  const query = (columns: string, order: string) =>
-    supabase!
-      .from('leaderboard')
+/** The per-path view does not exist yet, so the schema predates path boards. */
+function missingPathView(error: { code?: string; message?: string }): boolean {
+  return error.code === '42P01' || error.code === 'PGRST205' || /leaderboard_by_path/.test(error.message ?? '');
+}
+
+/**
+ * One board. `path` narrows it to a single learning path; without it every path counts
+ * towards one combined ranking.
+ *
+ * A database that predates either change still works: one without the per-path view
+ * falls back to the combined board, and one without points ranks by stars.
+ */
+export async function fetchLeaderboard(limit = 50, path?: string): Promise<LeaderboardResult> {
+  if (!supabase) return { entries: [], rankedBy: 'points', scope: path ?? 'all' };
+  const query = (columns: string, order: string) => {
+    const q = supabase!
+      .from(path ? 'leaderboard_by_path' : 'leaderboard')
       .select(columns)
       .order(order, { ascending: false })
       .order('labs_passed', { ascending: false })
       .order('last_completed', { ascending: true })
       .limit(limit);
+    return path ? q.eq('path', path) : q;
+  };
 
   const { data, error } = await query('user_id, display_name, total_points, total_stars, labs_passed, last_completed', 'total_points');
-  if (!error) return { entries: (data as unknown as Row[]).map(toEntry), rankedBy: 'points' };
+  if (!error) return { entries: (data as unknown as Row[]).map(toEntry), rankedBy: 'points', scope: path ?? 'all' };
+
+  // The per-path board needs a view an older schema does not have; fall back to the
+  // combined one rather than showing the learner an error they cannot act on.
+  if (path && missingPathView(error)) {
+    const combined = await fetchLeaderboard(limit);
+    return { ...combined, scope: 'all', wantedPath: path };
+  }
   if (!missingPointsColumn(error)) throw new Error(error.message);
 
   // Older database: rank by stars so the board still works until the schema is re-applied.
   const legacy = await query('user_id, display_name, total_stars, labs_passed, last_completed', 'total_stars');
   if (legacy.error) throw new Error(legacy.error.message);
-  return { entries: (legacy.data as unknown as Row[]).map(toEntry), rankedBy: 'stars' };
+  return { entries: (legacy.data as unknown as Row[]).map(toEntry), rankedBy: 'stars', scope: path ?? 'all' };
 }
 
 export async function fetchProfile(userId: string): Promise<Profile | null> {

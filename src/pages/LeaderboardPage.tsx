@@ -3,12 +3,19 @@ import { Link } from 'react-router-dom';
 import AccountMenu from '../components/AccountMenu';
 import Header from '../components/Header';
 import Icon, { NF } from '../components/Icon';
-import { labs } from '../content';
+import { labs, labsForPath, paths } from '../content';
 import { useAuth } from '../lib/auth';
 import { fetchLeaderboard, rankEntries, type RankedBy, type RankedEntry } from '../lib/leaderboard';
 import { DIFFICULTY_POINTS, EXAM_MULTIPLIER, formatPoints, maxTotalPoints } from '../lib/points';
 
-const MAX_POINTS = maxTotalPoints(labs);
+/** The tabs across the top: every path on its own, plus one combined board. */
+const SCOPES = [{ id: 'all', title: 'All paths' }, ...paths.map((p) => ({ id: p.id, title: p.shortTitle }))];
+
+/** How many labs and points a scope is worth, so the totals match the board being shown. */
+function scale(scope: string): { labs: number; points: number } {
+  const list = scope === 'all' ? labs : labsForPath(scope);
+  return { labs: list.length, points: maxTotalPoints(list) };
+}
 
 function Rank({ n }: { n: number }) {
   if (n === 1) return <Icon g={NF.trophy} className="text-star" label="1st" />;
@@ -19,17 +26,24 @@ function Rank({ n }: { n: number }) {
 
 export default function LeaderboardPage() {
   const auth = useAuth();
+  const [scope, setScope] = useState('all');
   const [entries, setEntries] = useState<RankedEntry[] | null>(null);
   const [rankedBy, setRankedBy] = useState<RankedBy>('points');
+  const [shown, setShown] = useState('all');
+  const [noPathBoards, setNoPathBoards] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!auth.enabled) return;
     let cancelled = false;
-    fetchLeaderboard(50)
+    setEntries(null);
+    setError(null);
+    fetchLeaderboard(50, scope === 'all' ? undefined : scope)
       .then((r) => {
         if (cancelled) return;
         setRankedBy(r.rankedBy);
+        setShown(r.scope);
+        setNoPathBoards(Boolean(r.wantedPath));
         setEntries(rankEntries(r.entries, r.rankedBy));
       })
       .catch((e: unknown) => {
@@ -38,7 +52,10 @@ export default function LeaderboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [auth.enabled]);
+  }, [auth.enabled, scope]);
+
+  const size = scale(shown);
+  const pathTitle = paths.find((p) => p.id === shown)?.title;
 
   const me = auth.user?.id;
   const mine = entries?.find((e) => e.userId === me);
@@ -53,16 +70,34 @@ export default function LeaderboardPage() {
           <Icon g={NF.trophy} className="mr-1.5" />
           Top learners
         </p>
-        <h1 className="display mt-2 text-4xl text-fg-bright">Leaderboard</h1>
+        <h1 className="display mt-2 text-4xl text-fg-bright">{pathTitle ?? 'Leaderboard'}</h1>
+        <div className="mt-4 flex flex-wrap gap-1 rounded-xl bg-surface-2 p-1 text-sm">
+          {SCOPES.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              onClick={() => setScope(s.id)}
+              className={`flex-1 rounded-lg px-3 py-1.5 font-medium transition-colors ${scope === s.id ? 'bg-surface-3 text-fg-bright' : 'text-muted hover:text-fg'}`}
+            >
+              {s.title}
+            </button>
+          ))}
+        </div>
         <p className="mt-2 text-sm leading-6 text-muted">
           {rankedBy === 'points' ? (
             <>
-              Ranked by points. A lab is worth {DIFFICULTY_POINTS.Beginner} points at Beginner, {DIFFICULTY_POINTS.Intermediate} at Intermediate and {DIFFICULTY_POINTS.Advanced} at Advanced, and an exam counts {EXAM_MULTIPLIER === 2 ? 'double' : `${EXAM_MULTIPLIER} times`}. You keep the full value for a pass without hints, 70% with some hints and 40% after using them all. {labs.length} labs, {formatPoints(MAX_POINTS)} points in total.
+              Ranked by points{shown === 'all' ? ' across every path' : ''}. A lab is worth {DIFFICULTY_POINTS.Beginner} points at Beginner, {DIFFICULTY_POINTS.Intermediate} at Intermediate and {DIFFICULTY_POINTS.Advanced} at Advanced, and an exam counts {EXAM_MULTIPLIER === 2 ? 'double' : `${EXAM_MULTIPLIER} times`}. You keep the full value for a pass without hints, 70% with some hints and 40% after using them all. {size.labs} labs, {formatPoints(size.points)} points{shown === 'all' ? ' in total' : ' on this path'}.
             </>
           ) : (
-            <>Ranked by stars. Each lab is worth up to three: three for passing without hints, two with some hints, one after using them all. {labs.length} labs, {labs.length * 3} stars in total.</>
+            <>Ranked by stars. Each lab is worth up to three: three for passing without hints, two with some hints, one after using them all. {size.labs} labs, {size.labs * 3} stars in total.</>
           )}
         </p>
+        {noPathBoards && (
+          <p className="mt-3 rounded-xl border border-border bg-surface px-4 py-3 text-xs leading-5 text-muted">
+            <Icon g={NF.warning} className="mr-1.5 text-warning" />
+            This site's database cannot split the board by path yet, so every path is counted together. The operator can re-apply <code className="font-mono text-fg">supabase/schema.sql</code> to separate them.
+          </p>
+        )}
         {rankedBy === 'stars' && (
           <p className="mt-3 rounded-xl border border-border bg-surface px-4 py-3 text-xs leading-5 text-muted">
             <Icon g={NF.warning} className="mr-1.5 text-warning" />
@@ -80,7 +115,7 @@ export default function LeaderboardPage() {
         ) : entries === null ? (
           <p className="mt-6 text-sm text-muted">Loading…</p>
         ) : entries.length === 0 ? (
-          <section className="card mt-6 p-6 text-sm text-muted">Nobody is on the board yet. Pass a lab while signed in to claim the top spot.</section>
+          <section className="card mt-6 p-6 text-sm text-muted">{shown === 'all' ? 'Nobody is on the board yet. Pass a lab while signed in to claim the top spot.' : 'Nobody has passed a lab on this path yet. Be the first.'}</section>
         ) : (
           <>
             {auth.user && !mine && (
@@ -123,7 +158,7 @@ export default function LeaderboardPage() {
                         </td>
                         <td className="px-4 py-2.5 text-right font-mono text-muted">
                           {e.labsPassed}
-                          <span className="text-xs">/{labs.length}</span>
+                          <span className="text-xs">/{size.labs}</span>
                         </td>
                         <td className="hidden px-4 py-2.5 text-right font-mono text-xs text-muted sm:table-cell">{e.lastCompleted ? new Date(e.lastCompleted).toLocaleDateString() : '—'}</td>
                       </tr>

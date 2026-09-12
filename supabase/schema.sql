@@ -11,6 +11,9 @@ create table if not exists public.lab_progress (
   -- share the stars earned. The client computes it (see src/lib/points.ts) because
   -- the lab catalogue lives in the app, not in the database.
   points       integer     not null default 0 check (points >= 0),
+  -- Which learning path the lab belongs to, so the leaderboard can be split by path.
+  -- Denormalised for the same reason as points: the catalogue lives in the app.
+  path         text,
   completed_at timestamptz not null,
   updated_at   timestamptz not null default now(),
   primary key (user_id, lab_id)
@@ -21,7 +24,20 @@ create table if not exists public.lab_progress (
 alter table public.lab_progress add column if not exists points integer not null default 0;
 update public.lab_progress set points = stars * 100 where points = 0;
 
+-- Existing installations: add the path column and fill it in from the lab id. Every
+-- Linux lab id starts lx-, every SQL one db-, and the rest are CCNA. The client writes
+-- the real value on the learner's next sync, so this only has to cover today's rows.
+alter table public.lab_progress add column if not exists path text;
+update public.lab_progress
+   set path = case
+                when lab_id like 'lx-%' then 'linux'
+                when lab_id like 'db-%' then 'sql'
+                else 'ccna'
+              end
+ where path is null;
+
 create index if not exists lab_progress_user_idx on public.lab_progress (user_id);
+create index if not exists lab_progress_path_idx on public.lab_progress (path);
 
 -- Keep updated_at fresh on every write.
 create or replace function public.touch_updated_at()
@@ -165,3 +181,23 @@ create view public.leaderboard as
   order by total_points desc, labs_passed desc, last_completed asc;
 
 grant select on public.leaderboard to anon, authenticated;
+
+-- The same board, split by learning path, so each path can be ranked on its own.
+-- An inner join rather than a left one: a learner appears on a path's board only once
+-- they have passed something on it.
+drop view if exists public.leaderboard_by_path;
+create view public.leaderboard_by_path as
+  select l.path,
+         p.id as user_id,
+         p.display_name,
+         sum(l.points)::int as total_points,
+         sum(l.stars)::int as total_stars,
+         count(l.lab_id)::int as labs_passed,
+         max(l.completed_at) as last_completed
+  from public.profiles p
+  join public.lab_progress l on l.user_id = p.id
+  where p.show_on_leaderboard and l.path is not null
+  group by l.path, p.id, p.display_name
+  order by l.path, total_points desc, labs_passed desc, last_completed asc;
+
+grant select on public.leaderboard_by_path to anon, authenticated;

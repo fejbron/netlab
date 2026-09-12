@@ -1,4 +1,4 @@
-import { getLab } from '../content';
+import { getLab, pathIdOfLab } from '../content';
 import { supabase } from './supabase';
 import { labPoints } from './points';
 import type { LabProgress, ProgressMap } from './progress';
@@ -12,12 +12,22 @@ interface ProgressRow {
 }
 
 /**
- * Points are derived from the lab and the stars, but they are stored with the row:
- * the leaderboard totals them in SQL, where the lab catalogue is not available.
+ * Points and the path are both derived from the lab, but they are stored with the row:
+ * the leaderboard totals and groups them in SQL, where the lab catalogue is not
+ * available. A lab id the catalogue no longer knows keeps its row and simply scores
+ * nothing and belongs to no path.
  */
 function toRow(userId: string, labId: string, p: LabProgress) {
   const lab = getLab(labId);
-  return { user_id: userId, lab_id: labId, score: p.score, stars: p.stars, points: lab ? labPoints(lab, p.stars) : 0, completed_at: p.completedAt };
+  return {
+    user_id: userId,
+    lab_id: labId,
+    score: p.score,
+    stars: p.stars,
+    points: lab ? labPoints(lab, p.stars) : 0,
+    path: lab ? pathIdOfLab(lab) : null,
+    completed_at: p.completedAt,
+  };
 }
 
 /** Every lab the signed-in learner has passed, as stored on the server. */
