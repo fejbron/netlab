@@ -221,7 +221,7 @@ export function getPath(id: string): LearningPath | undefined {
   return paths.find((p) => p.id === id);
 }
 
-/** Route of a path page; the first path lives at the site root. */
+/** Route of a path page. The site root is the home page, so every path has its own. */
 export function pathUrl(id: string): string {
-  return id === paths[0].id ? '/' : `/paths/${id}`;
+  return `/paths/${id}`;
 }

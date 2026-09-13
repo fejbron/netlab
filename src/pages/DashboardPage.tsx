@@ -76,7 +76,7 @@ export function PathRoute() {
         <div className="flex flex-1 flex-col items-center justify-center gap-3">
           <h1 className="display text-xl text-fg-bright">No such learning path</h1>
           <Link to="/" className="text-accent hover:underline">
-            Back to the CCNA path
+            Back to the home page
           </Link>
         </div>
       </div>
