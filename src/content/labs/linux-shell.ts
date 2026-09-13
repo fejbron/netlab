@@ -23,7 +23,7 @@ export const linuxShellLabs: Lab[] = [
       { id: 'ls', label: 'List your home directory in long format with hidden files', checks: [{ type: 'command', device: W, pattern: '^ls\\s+-\\w*l', label: 'ls with -l' }, { type: 'command', device: W, pattern: '^ls\\s+-\\w*a', label: 'ls with -a' }] },
       { id: 'cd', label: 'Move to /var/log and list it', checks: [{ type: 'command', device: W, pattern: '^cd /var/log/?$' }, { type: 'command', device: W, pattern: '^ls' }] },
       { id: 'cat', label: 'Read /etc/os-release', checks: [{ type: 'command', device: W, pattern: '^cat /etc/os-release$' }] },
-      { id: 'man', label: 'Open a manual page', checks: [{ type: 'command', device: W, pattern: '^(man \\S+|help|\\S+ --help)$' }] },
+      { id: 'man', label: 'Open a manual page', checks: [{ type: 'command', device: W, pattern: '^(man \\S+|help|\\S+ --help)$', label: 'Run man followed by a command name, or help, or a command with --help' }] },
     ],
   },
   {
@@ -101,7 +101,7 @@ export const linuxShellLabs: Lab[] = [
     createState: () => linuxSite(),
     objectives: [
       { id: 'link', label: 'Create the symbolic link', checks: [{ type: 'file', device: W, path: '~/app.log', kind: 'link' }, { type: 'file', device: W, path: '~/app.log', contains: 'ERROR disk full', label: 'The link resolves to the application log' }] },
-      { id: 'inspect', label: 'Inspect the link', checks: [{ type: 'command', device: W, pattern: '^(ls\\s+-\\w*l.*app\\.log|readlink.*app\\.log)' }] },
+      { id: 'inspect', label: 'Inspect the link', checks: [{ type: 'command', device: W, pattern: '^(ls\\s+-\\w*l.*app\\.log|readlink.*app\\.log)', label: 'Run ls -l on ~/app.log, or readlink on it' }] },
       { id: 'read', label: 'Read the errors through the link', checks: [{ type: 'command', device: W, pattern: '^grep\\b.*ERROR.*~?/?app\\.log' }] },
       { id: 'find', label: 'Find files by name and directories by type', checks: [{ type: 'command', device: W, pattern: '^find\\b.*-name' }, { type: 'command', device: W, pattern: '^find\\b.*-type d' }] },
     ],

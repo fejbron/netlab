@@ -96,9 +96,19 @@ export const linuxScriptingLabs: Lab[] = [
     hints: ['log() { echo "[$(date +%T)] $*"; }', 'check_service() { systemctl is-active "$1" > /dev/null && return 0; return 1; }', 'source lib.sh; log hello; check_service ssh && echo "ssh is up"'],
     createState: () => linuxSite(),
     objectives: [
-      { id: 'lib', label: 'lib.sh defines both functions', checks: [{ type: 'file', device: W, path: '~/lib.sh', contains: 'log\\s*\\(\\)|function log' }, { type: 'file', device: W, path: '~/lib.sh', contains: 'check_service\\s*\\(\\)|function check_service' }, { type: 'file', device: W, path: '~/lib.sh', contains: 'return' }] },
+      {
+        id: 'lib',
+        label: 'lib.sh defines both functions',
+        // A regex over file contents cannot be read as an instruction, so each one says
+        // in words what it is looking for.
+        checks: [
+          { type: 'file', device: W, path: '~/lib.sh', contains: 'log\\s*\\(\\)|function log', label: '~/lib.sh defines a function called log' },
+          { type: 'file', device: W, path: '~/lib.sh', contains: 'check_service\\s*\\(\\)|function check_service', label: '~/lib.sh defines a function called check_service' },
+          { type: 'file', device: W, path: '~/lib.sh', contains: 'return', label: 'and a function returns a value' },
+        ],
+      },
       { id: 'source', label: 'Load it into the shell', checks: [{ type: 'command', device: W, pattern: '^(source|\\.) (~/)?lib\\.sh$' }] },
-      { id: 'log', label: 'log prints a timestamped message', checks: [{ type: 'shell-output', device: W, pattern: '^\\[\\d\\d:\\d\\d:\\d\\d\\] hello$' }] },
+      { id: 'log', label: 'log prints a timestamped message', checks: [{ type: 'shell-output', device: W, pattern: '^\\[\\d\\d:\\d\\d:\\d\\d\\] hello$', label: 'Printed a line like [14:32:07] hello' }] },
       { id: 'check', label: 'check_service reports ssh as up', checks: [{ type: 'shell-output', device: W, pattern: '^ssh is up$' }] },
     ],
   },

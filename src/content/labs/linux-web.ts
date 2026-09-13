@@ -221,7 +221,7 @@ export const linuxWebLabs: Lab[] = [
     objectives: [
       { id: 'conf', label: 'Redirect and HSTS configured', checks: [{ type: 'file', device: W, path: CONF, contains: 'return\\s+301\\s+https://\\$host\\$request_uri' }, { type: 'file', device: W, path: CONF, contains: 'Strict-Transport-Security' }, { type: 'nginx-config', device: W, valid: true }] },
       { id: 'redirect', label: 'Plain HTTP is redirected', checks: [{ type: 'web-request', device: W, scheme: 'http', host: '^netlab\\.lab\\.local$', status: 301 }, { type: 'command', device: W, pattern: '^curl\\b.*-\\w*I' , label: 'Checked the headers with curl -I' }] },
-      { id: 'follow', label: 'Following the redirect reaches HTTPS', checks: [{ type: 'command', device: W, pattern: '^curl\\b.*-\\w*L' }, { type: 'web-request', device: W, scheme: 'https', host: '^netlab\\.lab\\.local$', status: 200 }] },
+      { id: 'follow', label: 'Following the redirect reaches HTTPS', checks: [{ type: 'command', device: W, pattern: '^curl\\b.*-\\w*L', label: 'Run curl with -L so it follows the redirect' }, { type: 'web-request', device: W, scheme: 'https', host: '^netlab\\.lab\\.local$', status: 200 }] },
     ],
   },
   {

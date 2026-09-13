@@ -76,7 +76,7 @@ export const linuxPythonLabs: Lab[] = [
     hints: ['lines = [f"hostname {intent[\'device\'][\'hostname\']}"]', 'for i in intent["interfaces"]: lines += [f"interface {i[\'name\']}", f" description {i[\'description\']}", f" ip address {i[\'ipv4\'][\'ip\']} {i[\'ipv4\'][\'netmask\']}", " no shutdown"]', 'for r in intent["static-routes"]: lines.append(f"ip route {r[\'prefix\']} {r[\'netmask\']} {r[\'next-hop\']}"); then open("r2.cfg", "w").write("\\n".join(lines) + "\\n")'],
     createState: () => linuxSite({ files: { '~/intent.json': INTENT_JSON } }),
     objectives: [
-      { id: 'script', label: 'render.py reads JSON and writes a file', checks: [{ type: 'file', device: W, path: '~/render.py', contains: 'json' }, { type: 'file', device: W, path: '~/render.py', contains: '"w"|\'w\'' }] },
+      { id: 'script', label: 'render.py reads JSON and writes a file', checks: [{ type: 'file', device: W, path: '~/render.py', contains: 'json' }, { type: 'file', device: W, path: '~/render.py', contains: '"w"|\'w\'', label: '~/render.py opens a file for writing' }] },
       { id: 'run', label: 'It runs cleanly', checks: [{ type: 'python-run', device: W, file: 'render.py' }] },
       { id: 'cfg', label: 'r2.cfg holds the rendered configuration', checks: [{ type: 'file', device: W, path: '~/r2.cfg', contains: '^hostname Site2-R2$' }, { type: 'file', device: W, path: '~/r2.cfg', contains: '^interface GigabitEthernet0/0$' }, { type: 'file', device: W, path: '~/r2.cfg', contains: '^ ip address 192\\.168\\.2\\.1 255\\.255\\.255\\.0$' }, { type: 'file', device: W, path: '~/r2.cfg', contains: '^ip route 192\\.168\\.1\\.0 255\\.255\\.255\\.0 10\\.0\\.0\\.1$' }, { type: 'file', device: W, path: '~/r2.cfg', contains: '^ntp server 192\\.168\\.1\\.50$' }] },
     ],

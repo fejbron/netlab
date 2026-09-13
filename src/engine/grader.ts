@@ -184,6 +184,11 @@ export interface GradeResult {
   objectives: ObjectiveResult[];
 }
 
+/** The sub-objective text a learner reads: the author's own label, or one built from the check. */
+export function checkLabel(check: Check): string {
+  return describe(check);
+}
+
 function describe(check: Check): string {
   if (check.label) return check.label;
   const on = check.device ? ` on ${check.device}` : '';
@@ -338,7 +343,7 @@ function describe(check: Check): string {
     case 'python-run':
       return `python3${check.file ? ` ${check.file}` : ''} ran${check.exitCode ? ` and exited ${check.exitCode}` : ' successfully'}${check.pattern ? ` printing ${readable(check.pattern)}` : ''}${on}`;
     case 'process':
-      return `${check.running === false ? 'No process' : 'A process'} matching ${check.pattern}${on}`;
+      return `${check.running === false ? 'No process' : 'A process'} matching ${readable(check.pattern)}${on}`;
     case 'web-request':
       return `Served ${check.scheme ? check.scheme.toUpperCase() + ' ' : ''}${check.host ? 'Host ' + readable(check.host) + ' ' : ''}${check.path ? readable(check.path) + ' ' : ''}${check.status ? 'with ' + check.status + ' ' : ''}${check.backend ? 'from backend ' + check.backend : ''}`.trim() + on;
     case 'nginx-config':
@@ -547,12 +552,43 @@ function sameList(a: 'all' | number[], b: 'all' | number[]): boolean {
 }
 
 /** Render a simple regex as the text it looks for, so objective labels read naturally. */
-function readable(pattern: string): string {
-  return pattern
+/**
+ * Turn a check's pattern into an instruction a learner can follow.
+ *
+ * These labels are read as instructions and typed verbatim, so any regex that reaches
+ * the page is a bug: somebody will type it. A lab whose pattern does not survive this
+ * should carry its own `label` instead.
+ */
+export function readable(pattern: string): string {
+  let s = pattern;
+  // An optional group is an alternative the author allowed, not part of the instruction:
+  // "(do )?show vlan( brief)?" is an instruction to run "show vlan brief".
+  for (let i = 0; i < 6 && /\([^()]*\)\?/.test(s); i++) s = s.replace(/\([^()]*\)\?/g, '');
+  // A class stands for something the learner supplies, so it becomes a gap that could
+  // never be mistaken for text to type. The bug this replaces printed "\S+" as "S+",
+  // and people typed it.
+  s = s
+    .replace(/\\[Sw][+*]/g, '…')
+    .replace(/\\d[+*]/g, 'a number')
+    .replace(/(?<!\\)\.[+*]/g, ' … ')
     .replace(/\\s[+*]/g, ' ')
-    .replace(/\\b/g, '')
+    .replace(/\\b/g, '');
+  // A group of alternatives reads as a list of them.
+  s = s.replace(/\(([^()]*\|[^()]*)\)/g, (_m, body: string) => {
+    const parts = body
+      .split('|')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    if (parts.length < 2) return parts[0] ?? '';
+    return parts.slice(0, -1).join(', ') + ' or ' + parts[parts.length - 1];
+  });
+  // A single optional character is worth keeping without its question mark: "python3?"
+  // is an instruction to run python3. An escaped "?" is a real one and is left alone.
+  s = s.replace(/([^\s()\\])\?/g, '$1');
+  // Anchors go before the escapes are removed, or an escaped "$" is mistaken for one.
+  s = s.replace(/^\^/, '').replace(/(?<!\\)\$$/, '');
+  return s
     .replace(/\\(.)/g, '$1')
-    .replace(/[\^$]/g, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }

@@ -229,7 +229,7 @@ export const linuxApacheLabs: Lab[] = [
       { id: 'module', label: 'Enable mod_headers', checks: [{ type: 'apache-module', device: W, name: 'headers' }] },
       { id: 'conf', label: 'Redirect and header configured', checks: [{ type: 'file', device: W, path: SITE, contains: 'Redirect\\s+permanent\\s+/\\s+https://' }, { type: 'file', device: W, path: SITE, contains: 'Strict-Transport-Security' }, { type: 'apache-config', device: W, valid: true }] },
       { id: 'redirect', label: 'Plain HTTP is redirected', checks: [{ type: 'web-request', device: W, scheme: 'http', host: '^netlab\\.lab\\.local$', status: 301, engine: 'apache' }, { type: 'command', device: W, pattern: '^curl\\b.*-\\w*I', label: 'Checked the headers with curl -I' }] },
-      { id: 'follow', label: 'Following the redirect reaches HTTPS', checks: [{ type: 'command', device: W, pattern: '^curl\\b.*-\\w*L' }, { type: 'web-request', device: W, scheme: 'https', status: 200, engine: 'apache' }] },
+      { id: 'follow', label: 'Following the redirect reaches HTTPS', checks: [{ type: 'command', device: W, pattern: '^curl\\b.*-\\w*L', label: 'Run curl with -L so it follows the redirect' }, { type: 'web-request', device: W, scheme: 'https', status: 200, engine: 'apache' }] },
     ],
   },
   {

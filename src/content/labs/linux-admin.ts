@@ -101,7 +101,14 @@ export const linuxAdminLabs: Lab[] = [
     hints: ['ip addr (or ip -br addr) and ip route.', 'ping -c 3 192.168.1.1 and ping -c 3 192.168.2.50; -c stops after a count.', 'The curl command is in the scenario; -k accepts the self-signed certificate.'],
     createState: () => linuxSite(),
     objectives: [
-      { id: 'ip', label: 'Read addresses and routes', checks: [{ type: 'command', device: W, pattern: '^ip\\b.*\\ba(ddr(ess)?)?\\b' }, { type: 'command', device: W, pattern: '^ip\\b.*\\br(oute)?\\b' }] },
+      {
+        id: 'ip',
+        label: 'Read addresses and routes',
+        checks: [
+          { type: 'command', device: W, pattern: '^ip\\b.*\\ba(ddr(ess)?)?\\b', label: 'Run ip addr' },
+          { type: 'command', device: W, pattern: '^ip\\b.*\\br(oute)?\\b', label: 'Run ip route' },
+        ],
+      },
       { id: 'ping', label: 'Reach the gateway and the remote server', checks: [{ type: 'ping', device: W, target: '192.168.1.1', success: true }, { type: 'ping', device: W, target: '192.168.2.50', success: true }] },
       { id: 'api', label: 'Read the router API from web1', checks: [{ type: 'api-request', device: 'R1', method: 'GET', path: 'ietf-interfaces:interfaces', status: 200, label: 'R1 answered GET .../ietf-interfaces:interfaces with 200 OK' }] },
     ],
