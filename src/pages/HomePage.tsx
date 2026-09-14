@@ -13,6 +13,7 @@ import { maxTotalPoints } from '../lib/points';
  * What the terminal types. Every command and every line of output below is what the
  * engines actually produce, including the two mistakes: the point of the page is that
  * the errors are real, so inventing them here would be the wrong kind of demonstration.
+ * The Terraform plan is trimmed to the resource and the summary; the lines kept are verbatim.
  */
 const SCENES: TerminalScene[] = [
   {
@@ -40,6 +41,17 @@ const SCENES: TerminalScene[] = [
     steps: [
       { cmd: 'SELECT name FROM customers WHERE city = NULL;', out: [' name', '------', '(0 rows)', ''] },
       { cmd: 'SELECT name FROM customers WHERE city IS NULL;', out: [' name', '------------', ' Cleo Marsh', '(1 row)'] },
+    ],
+  },
+  {
+    label: 'Terraform',
+    prompt: 'student@ops1:~/infra$',
+    steps: [
+      { cmd: 'terraform plna', out: ['Terraform has no command named "plna". Did you mean "plan"?', '', "To see all of Terraform's top-level commands, run:", '  terraform -help'] },
+      {
+        cmd: 'terraform plan',
+        out: ['  # random_pet.server must be replaced', '-/+ resource "random_pet" "server" {', '      ~ id     = "lucky-falcon" -> (known after apply)', '      ~ length = 2 -> 3 # forces replacement', '        # (1 unchanged attribute hidden)', '    }', '', 'Plan: 1 to add, 0 to change, 1 to destroy.'],
+      },
     ],
   },
 ];
@@ -143,9 +155,9 @@ function Topology() {
 }
 
 const FEATURES = [
-  { glyph: NF.terminal, title: 'Real engines, not screenshots', body: 'A command resolver with prefix abbreviation and context help, a packet-forwarding simulation, a Bash subset over a permissioned filesystem, and a SQL parser and planner written from scratch.' },
-  { glyph: NF.warning, title: 'Errors that teach', body: "Mistype a command and you get the caret and the marker. Break an nginx file and nginx -t names the file and the line. Break a constraint and the database names the key that already exists." },
-  { glyph: NF.check, title: 'Graded as you type', body: 'Objectives check the state of the device, the filesystem or the database, not the text you typed, so any route to the right answer counts.' },
+  { glyph: NF.terminal, title: 'Real engines, not screenshots', body: 'A command resolver with prefix abbreviation and context help, a packet-forwarding simulation, a Bash subset over a permissioned filesystem, a SQL parser and planner written from scratch, and a Terraform plan and apply engine with its own HCL parser.' },
+  { glyph: NF.warning, title: 'Errors that teach', body: "Mistype a command and you get the caret and the marker. Break an nginx file and nginx -t names the file and the line. Break a constraint and the database names the key that already exists. Change the wrong argument and terraform plan marks the line that forces a replacement." },
+  { glyph: NF.check, title: 'Graded as you type', body: 'Objectives check the state of the device, the filesystem, the database or the cloud, not the text you typed, so any route to the right answer counts.' },
   { glyph: NF.cloud, title: 'Nothing to install', body: 'It all runs in the browser. No virtual machines, no images to download, no licences. Open a tab and start.' },
 ];
 
@@ -181,7 +193,7 @@ export default function HomePage() {
             </Reveal>
             <Reveal delay={160}>
               <p className="mt-5 max-w-xl text-[15px] leading-7 text-muted">
-                NetLab simulates a Cisco network, a Linux server and a PostgreSQL database well enough to get them wrong. You type real commands, they answer the way the real things answer, and every objective is checked against what actually happened.
+                NetLab simulates a Cisco network, a Linux server, a PostgreSQL database and a cloud you build with Terraform, well enough to get them wrong. You type real commands, they answer the way the real things answer, and every objective is checked against what actually happened.
               </p>
             </Reveal>
             <Reveal delay={240}>
@@ -221,10 +233,10 @@ export default function HomePage() {
       <section id="paths" className="mx-auto w-full max-w-6xl scroll-mt-16 px-4 py-16 lg:py-20">
         <Reveal>
           <p className="label text-accent">Learning paths</p>
-          <h2 className="display mt-2 text-3xl text-fg-bright">Three courses, one terminal</h2>
+          <h2 className="display mt-2 text-3xl text-fg-bright">{['One', 'Two', 'Three', 'Four', 'Five', 'Six'][paths.length - 1] ?? paths.length} courses, one terminal</h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">Each path unlocks lab by lab and ends in exams that put the whole thing together. Start anywhere; they do not depend on each other.</p>
         </Reveal>
-        <div className="mt-8 grid gap-4 md:grid-cols-3">
+        <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {paths.map((p, i) => {
             const list = labsForPath(p.id);
             return (
@@ -276,7 +288,7 @@ export default function HomePage() {
                 {[
                   { n: '01', t: 'A scenario, not a script', b: 'Every lab opens with a situation and a list of objectives. Nothing tells you which keys to press.' },
                   { n: '02', t: 'A terminal that argues back', b: 'Abbreviations, tab completion and context help all work. So do the error messages, which is usually how you find out what you actually typed.' },
-                  { n: '03', t: 'Checked against the real state', b: 'Grading reads the running configuration, the filesystem or the database. Stars depend on how many hints you needed.' },
+                  { n: '03', t: 'Checked against the real state', b: 'Grading reads the running configuration, the filesystem, the database, or the state and the cloud. Stars depend on how many hints you needed.' },
                 ].map((s, i) => (
                   <Reveal key={s.n} delay={i * 110}>
                     <li className="flex gap-4">
@@ -349,7 +361,7 @@ export default function HomePage() {
 
       <footer className="border-t border-border/60 px-4 py-8">
         <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 text-xs text-muted">
-          <p>NetLab is an independent, open-source simulator. It is not affiliated with Cisco, The Linux Foundation or the PostgreSQL project.</p>
+          <p>NetLab is an independent, open-source simulator. It is not affiliated with Cisco, The Linux Foundation, the PostgreSQL project or HashiCorp.</p>
           <a href="https://github.com/fejbron/netlab" className="flex items-center gap-1.5 hover:text-fg" target="_blank" rel="noreferrer">
             <Icon g={NF.github} />
             Source on GitHub

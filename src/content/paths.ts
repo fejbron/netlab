@@ -215,7 +215,105 @@ export const sqlPath: LearningPath = {
   },
 };
 
-export const paths: LearningPath[] = [ccnaPath, linuxPath, sqlPath];
+/**
+ * HashiCorp Certified: Terraform Associate (004). HashiCorp publishes eight objectives and
+ * their sub-objectives (1a, 1b, ...) but no weighting, so the percentages below are each
+ * objective's share of the published sub-objectives, rounded. Codes are written 1.a so
+ * they sort and group like the other paths' blueprints.
+ */
+export const TF_DOMAINS: ExamDomain[] = [
+  { id: '1', title: 'Infrastructure as Code (IaC) with Terraform', weight: 8 },
+  { id: '2', title: 'Terraform fundamentals', weight: 11 },
+  { id: '3', title: 'Core Terraform workflow', weight: 19 },
+  { id: '4', title: 'Terraform configuration', weight: 21 },
+  { id: '5', title: 'Terraform modules', weight: 11 },
+  { id: '6', title: 'Terraform state management', weight: 11 },
+  { id: '7', title: 'Maintain infrastructure with Terraform', weight: 8 },
+  { id: '8', title: 'HCP Terraform', weight: 11 },
+];
+
+export const TF_TOPICS: Record<string, string> = {
+  '1.a': 'Explain what IaC is',
+  '1.b': 'Describe the advantages of IaC patterns',
+  '1.c': 'Explain how Terraform manages multi-cloud, hybrid cloud, and service-agnostic workflows',
+  '2.a': 'Install and version Terraform providers',
+  '2.b': 'Describe how Terraform uses providers',
+  '2.c': 'Write Terraform configuration using multiple providers',
+  '2.d': 'Explain how Terraform uses and manages state',
+  '3.a': 'Describe the Terraform workflow',
+  '3.b': 'Initialize a Terraform working directory',
+  '3.c': 'Validate a Terraform configuration',
+  '3.d': 'Generate and review an execution plan for Terraform',
+  '3.e': 'Apply changes to infrastructure with Terraform',
+  '3.f': 'Destroy Terraform-managed infrastructure',
+  '3.g': 'Apply formatting and style adjustments to a configuration',
+  '4.a': 'Use and differentiate resource and data blocks',
+  '4.b': 'Refer to resource attributes and create cross-resource references',
+  '4.c': 'Use variables and outputs',
+  '4.d': 'Understand and use complex types',
+  '4.e': 'Write dynamic configuration using expressions and functions',
+  '4.f': 'Define resource dependencies in configuration',
+  '4.g': 'Validate configuration using custom conditions',
+  '4.h': 'Understand best practices for managing sensitive data, including secrets management with Vault',
+  '5.a': 'Explain how Terraform sources modules',
+  '5.b': 'Describe variable scope within modules',
+  '5.c': 'Use modules in configuration',
+  '5.d': 'Manage module versions',
+  '6.a': 'Describe the local backend',
+  '6.b': 'Describe state locking',
+  '6.c': 'Configure remote state using the backend block',
+  '6.d': 'Manage resource drift and Terraform state',
+  '7.a': 'Import existing infrastructure into your Terraform workspace',
+  '7.b': 'Use the CLI to inspect state',
+  '7.c': 'Describe when and how to use verbose logging',
+  '8.a': 'Use HCP Terraform to create infrastructure',
+  '8.b': 'Describe HCP Terraform collaboration and governance features',
+  '8.c': 'Describe how to organize and use HCP Terraform workspaces and projects',
+  '8.d': 'Configure and use HCP Terraform integration',
+};
+
+export const terraformPath: LearningPath = {
+  id: 'terraform',
+  title: 'Terraform Infrastructure as Code',
+  shortTitle: 'Terraform',
+  scopeLabel: 'Cloud infrastructure as code path',
+  levelLabel: 'Associate',
+  eyebrow: 'Terraform · in your browser',
+  summary: 'Learn Terraform by building cloud infrastructure in a simulated, vendor-neutral cloud: write configuration, plan and apply it, manage state, build modules, and run it in HCP Terraform.',
+  outcomes: [
+    'Explain infrastructure as code, and run the init, validate, plan, apply and destroy workflow with confidence.',
+    'Install and pin providers, read the dependency lock file, and use several providers and provider configurations together.',
+    'Write configuration with variables, outputs, data sources, complex types, expressions, functions, for_each, count and dynamic blocks.',
+    'Control dependencies and lifecycle, validate inputs with custom conditions, and keep secrets out of code and out of state.',
+    'Write local modules, consume versioned registry modules, and refactor resources into modules without recreating them.',
+    'Inspect and change state safely, resolve drift, import existing infrastructure, move state to a remote backend and recover from a stale lock.',
+    'Debug with verbose logging, and use HCP Terraform workspaces, projects, remote runs and policy checks.',
+  ],
+  audience: 'Network, systems and cloud engineers who build infrastructure by hand today, and learners preparing for the HashiCorp Terraform Associate (004) exam.',
+  prerequisites: 'Comfort at a Linux shell (the Linux path covers it) and basic IP addressing. No cloud account is needed: the cloud is simulated.',
+  skillTags: ['HCL', 'Providers', 'Plan and apply', 'State', 'Modules', 'Import and drift', 'HCP Terraform'],
+  blueprint: {
+    version: 'Terraform Associate (004)',
+    reviewedAt: '2026-09-14',
+    facts: [
+      { label: 'Exam', value: 'Associate 004' },
+      { label: 'Duration', value: '1 hour' },
+      { label: 'Tests', value: 'Terraform 1.12' },
+      { label: 'Objectives', value: '8' },
+    ],
+    sources: [
+      { label: 'Terraform Associate (004) exam content list', url: 'https://developer.hashicorp.com/terraform/tutorials/certification-004/associate-review-004' },
+      { label: 'HashiCorp infrastructure automation certifications', url: 'https://developer.hashicorp.com/certifications/infrastructure-automation' },
+    ],
+    intro: 'HashiCorp publishes eight exam objectives, each with lettered sub-objectives (1a, 1b and so on, written 1.a here). Every NetLab module is tagged with the sub-objectives it practises, so the bars show how far you are through the hands-on part of each objective. The exam itself is multiple choice; the labs build the understanding it tests.',
+    weightingNote: 'HashiCorp does not publish a weighting for the objectives. The percentages here are each objective’s share of the published sub-objectives, which is NetLab’s approximation rather than HashiCorp’s.',
+    trademarkNotice: 'NetLab is an independent, open-source simulator and is not affiliated with, authorized, sponsored, or endorsed by HashiCorp or IBM. HashiCorp, Terraform and HCP Terraform are trademarks of HashiCorp, an IBM company. NetLab Cloud is a fictional cloud that exists only in this simulator. The labs are original and are not official training or a guarantee of exam readiness.',
+    domains: TF_DOMAINS,
+    topics: TF_TOPICS,
+  },
+};
+
+export const paths: LearningPath[] = [ccnaPath, linuxPath, sqlPath, terraformPath];
 
 export function getPath(id: string): LearningPath | undefined {
   return paths.find((p) => p.id === id);

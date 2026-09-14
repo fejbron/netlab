@@ -27,12 +27,19 @@ import { sqlChangeLabs } from './labs/sql-change';
 import { sqlDesignLabs } from './labs/sql-design';
 import { sqlPerformLabs } from './labs/sql-perform';
 import { sqlExamLabs } from './labs/sql-exams';
+import { tfBasicsLabs } from './labs/tf-basics';
+import { tfProvidersLabs } from './labs/tf-providers';
+import { tfConfigLabs } from './labs/tf-config';
+import { tfModulesLabs } from './labs/tf-modules';
+import { tfStateLabs } from './labs/tf-state';
+import { tfHcpLabs } from './labs/tf-hcp';
+import { tfExamLabs } from './labs/tf-exams';
 import { paths } from './paths';
 
 export type { Lab, Module, Difficulty } from './types';
 export { BLUEPRINT, EXAM_DOMAINS, EXAM_TOPICS, PATH_OVERVIEW, domainCoverage, topicDomain, byTopicCode } from './blueprint';
 export type { ExamDomain, DomainCoverage } from './blueprint';
-export { paths, getPath, pathUrl, ccnaPath, linuxPath, sqlPath, LFCS_DOMAINS, LFCS_TOPICS, SQL_DOMAINS, SQL_TOPICS } from './paths';
+export { paths, getPath, pathUrl, ccnaPath, linuxPath, sqlPath, terraformPath, LFCS_DOMAINS, LFCS_TOPICS, SQL_DOMAINS, SQL_TOPICS, TF_DOMAINS, TF_TOPICS } from './paths';
 export type { LearningPath, PathBlueprint } from './paths';
 
 export const modules: Module[] = [
@@ -93,6 +100,14 @@ export const modules: Module[] = [
   { id: 'sql-design', pathId: 'sql', order: 4, title: 'Design the Schema', description: 'Build tables from scratch: choose types, identify rows with a primary key, refuse bad data with constraints, link tables with foreign keys, alter a table already in use, clean up duplicates, and model a many-to-many.', examTopics: ['SD.1', 'SD.2', 'SD.3', 'SD.4', 'SD.5'] },
   { id: 'sql-perform', pathId: 'sql', order: 5, title: 'Make It Fast and Safe', description: 'Read a query plan, add an index that changes it, learn which queries a multi-column index helps, use a unique one as a constraint, and save a query as a view.', examTopics: ['PS.1', 'PS.2', 'PS.3'] },
   { id: 'sql-exams', pathId: 'sql', order: 6, title: 'SQL Exams', description: 'Three capstones: answer a trading report with joins, aggregates and subqueries; design, constrain, fill and query a schema of your own; and clean up a table nobody ever constrained.', examTopics: ['QL.2', 'JA.1', 'JA.3', 'JA.4', 'JA.5', 'SD.1', 'SD.3', 'SD.4'] },
+  // --- Terraform
+  { id: 'tf-basics', pathId: 'terraform', order: 1, title: 'Meet Terraform', description: 'Infrastructure as code and the core workflow: init, plan, apply and destroy, validate and fmt, and reading a plan before you trust it.', examTopics: ['1.a', '1.b', '3.a', '3.b', '3.c', '3.d', '3.e', '3.f', '3.g'] },
+  { id: 'tf-providers', pathId: 'terraform', order: 2, title: 'Providers and State', description: 'Pin providers and read the lock file, write resources that refer to each other, combine providers and provider aliases across regions, and see what state is for by losing it.', examTopics: ['1.c', '2.a', '2.b', '2.c', '2.d', '4.b', '6.a', '7.b'] },
+  { id: 'tf-config', pathId: 'terraform', order: 3, title: 'Variables, Expressions and Dependencies', description: 'Inputs and outputs, data sources, count and for_each, complex types, functions and dynamic blocks, then lifecycle rules, custom conditions, and secrets that never reach state.', examTopics: ['4.a', '4.b', '4.c', '4.d', '4.e', '4.f', '4.g', '4.h'] },
+  { id: 'tf-modules', pathId: 'terraform', order: 4, title: 'Modules', description: 'Write a local module with inputs and outputs, respect its scope, consume and upgrade a versioned registry module, and refactor running resources into a module with moved blocks.', examTopics: ['5.a', '5.b', '5.c', '5.d'] },
+  { id: 'tf-state', pathId: 'terraform', order: 5, title: 'Manage State and Troubleshoot', description: 'Inspect and rename state, resolve drift, import hand-built infrastructure, move state to a remote backend, break a stale lock, run environments as workspaces, and debug with verbose logging.', examTopics: ['6.a', '6.b', '6.c', '6.d', '7.a', '7.b', '7.c'] },
+  { id: 'tf-hcp', pathId: 'terraform', order: 6, title: 'HCP Terraform', description: 'Log in and run plans and applies remotely, organise workspaces by project and tag, and meet the policy checks that govern what a run may build.', examTopics: ['8.a', '8.b', '8.c', '8.d'] },
+  { id: 'tf-exams', pathId: 'terraform', order: 7, title: 'Terraform Exams', description: 'Two capstones: build a production network from a written specification, and take over an inherited estate with a leaked secret, drift, hand-built resources and local state.', examTopics: ['2.a', '3.e', '3.g', '4.c', '4.f', '4.h', '6.c', '6.d', '7.a'] },
 ];
 
 const pathOrder = (pathId: string) => paths.findIndex((p) => p.id === pathId);
@@ -125,6 +140,13 @@ export const labs: Lab[] = [
   ...sqlDesignLabs,
   ...sqlPerformLabs,
   ...sqlExamLabs,
+  ...tfBasicsLabs,
+  ...tfProvidersLabs,
+  ...tfConfigLabs,
+  ...tfModulesLabs,
+  ...tfStateLabs,
+  ...tfHcpLabs,
+  ...tfExamLabs,
 ].sort((a, b) => {
   const ma = modules.find((m) => m.id === a.moduleId);
   const mb = modules.find((m) => m.id === b.moduleId);

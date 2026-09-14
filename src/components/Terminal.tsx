@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from 'react';
 import type { TermLine } from '../lib/session';
 import Icon, { NF } from './Icon';
 
@@ -11,9 +11,13 @@ interface Props {
   onTab: (line: string) => string | null;
   onClear: () => void;
   modeLabel: string;
+  /** "?" asks for context help as soon as it is typed (Cisco IOS). Off for shells, where ? is ordinary text. */
+  questionHelp?: boolean;
+  /** Several lines pasted at once, run one after another. */
+  onPasteLines?: (lines: string[]) => void;
 }
 
-export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onClear, modeLabel }: Props) {
+export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onClear, modeLabel, questionHelp = true, onPasteLines }: Props) {
   const [value, setValue] = useState('');
   const [history, setHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number | null>(null);
@@ -34,7 +38,7 @@ export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onCle
   }
 
   function onChange(next: string) {
-    if (!masked && next.endsWith('?')) submit(next);
+    if (questionHelp && !masked && next.endsWith('?')) submit(next);
     else setValue(next);
   }
 
@@ -46,7 +50,7 @@ export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onCle
       e.preventDefault();
       const completed = onTab(value);
       if (completed) setValue(completed);
-    } else if (e.key === '?' && !masked) {
+    } else if (e.key === '?' && questionHelp && !masked) {
       e.preventDefault();
       submit(value + '?');
     } else if (e.key === 'l' && e.ctrlKey) {
@@ -72,6 +76,19 @@ export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onCle
     }
   }
 
+  function onPaste(e: ClipboardEvent<HTMLInputElement>) {
+    const text = e.clipboardData.getData('text');
+    if (!onPasteLines || !/\r?\n/.test(text)) return;
+    e.preventDefault();
+    const pasted = text.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n');
+    // Whatever was already typed joins the first pasted line, as in a real terminal.
+    pasted[0] = value + pasted[0];
+    setHistory((h) => [...h, ...pasted.filter((l) => l.trim())].slice(-100));
+    setHistoryIndex(null);
+    setValue('');
+    onPasteLines(pasted);
+  }
+
   return (
     <div className="flex h-full flex-col bg-term font-mono text-[13px] leading-[1.45]" onClick={() => inputRef.current?.focus()}>
       <div ref={scrollRef} className="flex-1 overflow-auto px-4 py-3">
@@ -95,6 +112,7 @@ export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onCle
             value={value}
             onChange={(e) => onChange(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
             autoFocus
             autoComplete="off"
             autoCapitalize="off"
@@ -112,8 +130,7 @@ export default function Terminal({ lines, prompt, masked, onSubmit, onTab, onCle
         </span>
         <span className="hidden gap-3 sm:flex">
           {[
-            ['Tab', 'complete'],
-            ['?', 'help'],
+            ...(questionHelp ? [['Tab', 'complete'], ['?', 'help']] : onPasteLines ? [['Paste', 'multi-line']] : []),
             ['↑↓', 'history'],
             ['Ctrl+L', 'clear'],
           ].map(([k, v]) => (

@@ -23,6 +23,12 @@ export type { LinuxState, LinuxSpec, FsNode, LinuxUser, LinuxGroup, LinuxService
 export { serveHttp, testNginx, loadNginx, makeCertificate, makePrivateKey, parseCertificate, resolveName, APACHE_MODULES, enabledModules, enabledSites, loadApache, testApache } from './linux';
 export { createSqlState, runSqlLine, sqlPrompt, formatResult, runSelect, queryFor, emptyDatabase, parse as parseSql, splitStatements } from './sql';
 export type { SqlSpec, SqlState, SqlDatabase, SqlValue, SqlType, TableDef, ColumnDef, StatementResult } from './sql';
+export { runTerraform, resumeTerraform } from './terraform/cli';
+export type { TfPending, TfResult } from './terraform/cli';
+export { createCloud, netcloudCli } from './terraform/cloud';
+export type { CloudAccount, CloudSpec, CloudObject, CloudKind } from './terraform/cloud';
+export { parseHcl, renderDiags } from './terraform/hcl';
+export { formatHcl } from './terraform/fmt';
 export { restconfRequest, interfaceJson, statusText } from './restconf';
 export type { ApiCall, ApiResponse, ApiMethod } from './restconf';
 export { dhcpSnoopingBindings, dhcpSnoopingDrop } from './network';

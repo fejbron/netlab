@@ -125,5 +125,7 @@ export function byTopicCode(a: string, b: string): number {
   const [ad, at] = a.split('.');
   const [bd, bt] = b.split('.');
   const dn = Number(ad) - Number(bd);
-  return (Number.isNaN(dn) ? ad.localeCompare(bd) : dn) || Number(at) - Number(bt);
+  const tn = Number(at) - Number(bt);
+  // Terraform's sub-objectives are lettered ("4.c"), so fall back to comparing the text.
+  return (Number.isNaN(dn) ? ad.localeCompare(bd) : dn) || (Number.isNaN(tn) ? (at ?? '').localeCompare(bt ?? '') : tn);
 }

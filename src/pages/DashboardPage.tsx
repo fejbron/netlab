@@ -169,7 +169,7 @@ export default function DashboardPage({ path = paths[0] }: { path?: LearningPath
             const current = p.id === path.id;
             return (
               <Link key={p.id} to={pathUrl(p.id)} className={`flex items-center gap-3 rounded-xl border px-3.5 py-2 transition-colors ${current ? 'border-accent/50 bg-accent-soft' : 'border-border bg-surface hover:border-border-strong'}`} aria-current={current ? 'page' : undefined}>
-                <Icon g={p.id === 'linux' ? NF.code : NF.exchange} className={current ? 'text-accent' : 'text-muted'} />
+                <Icon g={p.id === 'linux' ? NF.code : p.id === 'terraform' ? NF.cloud : NF.exchange} className={current ? 'text-accent' : 'text-muted'} />
                 <span className="min-w-0">
                   <span className={`block text-sm font-semibold ${current ? 'text-fg-bright' : 'text-fg'}`}>{p.title}</span>
                   <span className="label block text-muted">

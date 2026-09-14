@@ -6,6 +6,7 @@ import { getNode, normalizePath, octal } from './linux/fs';
 import { testNginx } from './linux/web';
 import { display as sqlDisplay, queryFor, type SqlState, type SqlType, type SqlValue } from './sql';
 import { enabledModules, enabledSites, testApache } from './linux/apache';
+import { describeTf, evaluateTf, TF_CHECKS, type TfCheck } from './terraform/grade';
 import type { AclAddr, AclEntry, AclProtocol, ApiRequest, CliErrorKind, DeviceState, LineState, Mode, PortMode, SnmpMode, SyslogLevel } from './types';
 
 interface Base {
@@ -153,6 +154,8 @@ export type Check = Base &
     | { type: 'sql-view'; name: string; database?: string }
     /** What the learner's most recent SELECT returned. */
     | { type: 'sql-result'; rows?: number; columns?: string[]; contains?: string; database?: string }
+    // --- Terraform (device = the host that runs terraform); see terraform/grade.ts
+    | TfCheck
   );
 
 const SQL_CHECKS = new Set(['sql-table', 'sql-query', 'sql-answer', 'sql-ran', 'sql-index', 'sql-view', 'sql-result']);
@@ -192,6 +195,7 @@ export function checkLabel(check: Check): string {
 function describe(check: Check): string {
   if (check.label) return check.label;
   const on = check.device ? ` on ${check.device}` : '';
+  if (TF_CHECKS.has(check.type)) return describeTf(check as TfCheck, '');
   switch (check.type) {
     case 'command':
       return `Run ${readable(check.pattern)}${on}`;
@@ -370,6 +374,8 @@ function describe(check: Check): string {
       return 'The last query returned ' + (check.rows !== undefined ? check.rows + ' row' + (check.rows === 1 ? '' : 's') : check.columns ? check.columns.join(', ') : 'something') + (check.contains ? ' including ' + check.contains : '');
     case 'apache-site':
       return `Apache site ${check.name} is ${check.enabled === false ? 'disabled' : 'enabled'}${on}`;
+    default:
+      return describeTf(check as TfCheck, on);
   }
 }
 
@@ -620,6 +626,10 @@ function evaluateCheckInner(check: Check, net: NetworkState): boolean | undefine
   if (check.type === 'command' && check.device && net.hosts[check.device]) {
     const re = new RegExp(check.pattern, 'i');
     return ranCommands(net.hosts[check.device]).some((c) => re.test(c));
+  }
+  if (TF_CHECKS.has(check.type)) {
+    const h = net.hosts[check.device ?? ''] ?? Object.values(net.hosts).find((x) => x.linux?.cloud);
+    return h?.linux ? evaluateTf(check as TfCheck, h.linux) : false;
   }
   if (SQL_CHECKS.has(check.type)) {
     const h = net.hosts[check.device ?? ''] ?? Object.values(net.hosts).find((x) => x.linux?.databases);

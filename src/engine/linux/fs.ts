@@ -5,6 +5,8 @@
  */
 import { installApacheFiles, loadApache } from './apache';
 import { createSqlState, type SqlSpec, type SqlState } from '../sql';
+import { createCloud, type CloudAccount, type CloudSpec } from '../terraform/cloud';
+import type { TfPending } from '../terraform/cli';
 import { loadNginx } from './web';
 
 export interface FsNode {
@@ -93,7 +95,9 @@ export type LinuxPending =
   /** passwd is asking for a password. */
   | { kind: 'password'; user: string; stage: 'new' | 'retype'; first?: string }
   /** The learner is inside psql, so lines are SQL rather than shell commands. */
-  | { kind: 'sql'; db: string };
+  | { kind: 'sql'; db: string }
+  /** terraform is waiting for an answer (apply approval, a variable, login), or console is open. */
+  | TfPending;
 
 export interface LinuxState {
   hostname: string;
@@ -124,6 +128,10 @@ export interface LinuxState {
   web: WebState;
   /** PostgreSQL databases on this host, by name. Absent when the server is not installed. */
   databases?: Record<string, SqlState>;
+  /** The NetLab Cloud account this host's terraform and netcloud commands reach. */
+  cloud?: CloudAccount;
+  /** Every terraform command run on this host, for grading. */
+  terraformRuns?: Array<{ command: string; args: string[]; code: number; dir: string; workspace: string; add?: number; change?: number; destroy?: number; imported?: number; noChanges?: boolean; remote?: boolean }>;
 }
 
 export interface LinuxFileSpec {
@@ -165,6 +173,8 @@ export interface LinuxSpec {
   processes?: Array<{ user: string; cmd: string }>;
   /** PostgreSQL databases to stand up, by name. Declaring any installs and starts the server. */
   databases?: Record<string, SqlSpec>;
+  /** A NetLab Cloud account reachable from this host (installs terraform and netcloud). */
+  cloud?: CloudSpec;
 }
 
 export const KNOWN_SERVICES: Record<string, { description: string; port?: number; package?: string }> = {
@@ -199,6 +209,7 @@ export const KNOWN_PACKAGES: Record<string, { service?: string; description: str
   jq: { description: 'lightweight and flexible command-line JSON processor' },
   vim: { description: 'Vi IMproved - enhanced vi editor' },
   'net-tools': { description: 'NET-3 networking toolkit' },
+  terraform: { description: 'Infrastructure as code tool from HashiCorp' },
 };
 
 // ---------------------------------------------------------------------------
@@ -596,6 +607,10 @@ export function createLinuxState(spec: LinuxSpec, hostName: string): LinuxState 
     for (const [name, db] of Object.entries(spec.databases)) state.databases[name] = createSqlState({ ...db, database: name });
     if (!state.packages.includes('postgresql')) state.packages.push('postgresql');
     state.services.postgresql ??= { name: 'postgresql', description: KNOWN_SERVICES.postgresql.description, active: true, enabled: true, port: 5432 };
+  }
+  if (spec.cloud) {
+    state.cloud = createCloud(spec.cloud);
+    if (!state.packages.includes('terraform')) state.packages.push('terraform');
   }
   if (state.services.nginx?.active) loadNginx(state);
   if (state.services.apache2?.active) loadApache(state);

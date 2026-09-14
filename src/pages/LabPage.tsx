@@ -5,6 +5,7 @@ import Objectives from '../components/Objectives';
 import ResultsModal from '../components/ResultsModal';
 import Terminal from '../components/Terminal';
 import Topology from '../components/Topology';
+import CloudPanel from '../components/CloudPanel';
 import { getLab, isLabUnlocked, labNetwork, nextLab, pathIdOfLab, pathUrl, previousLab, type Lab } from '../content';
 import { applyPythonResult, executeHost, executeOn, grade, hostMaskedInput, hostPrompt, isMaskedInput, prompt, tabComplete, type GradeResult, type NetworkState, type PendingPython } from '../engine';
 import { runPython } from '../lib/pyodide';
@@ -27,6 +28,14 @@ function welcome(title: string, network: NetworkState, nodeId: string): TermLine
         { kind: 'output', text: `Welcome to NetLab: ${title}` },
         { kind: 'output', text: `psql (16.2, simulated) on ${host.linux.hostname}, connected to database "${sql.db.name}" as "${sql.user}".` },
         { kind: 'output', text: 'Statements end with a semicolon. \\? lists the psql commands, \\dt the tables, \\q leaves for the shell.' },
+        { kind: 'output', text: '' },
+      ];
+    }
+    if (host.linux.cloud) {
+      return [
+        { kind: 'output', text: `Welcome to NetLab: ${title}` },
+        { kind: 'output', text: `Ubuntu 24.04.1 LTS on ${host.linux.hostname} (simulated). Terraform v1.12.2 and the netcloud CLI are installed; you are in ${host.linux.cwd.replace(/^\/home\/[^/]+/, '~')}.` },
+        { kind: 'output', text: "There is no editor: write files with cat > main.tf << 'EOF' (quote EOF so ${...} is kept), or paste several lines at once." },
         { kind: 'output', text: '' },
       ];
     }
@@ -182,30 +191,42 @@ export default function LabPage() {
       .finally(() => setPythonBusy(null));
   }
 
-  function onSubmit(line: string): boolean {
+  /** Run lines typed (or pasted) at the active console, one after another. */
+  function runLines(typed: string[]): boolean {
     if (!session || pythonBusy) return false;
     let keep = false;
-    let echoPrompt: string;
-    let masked = false;
-    let nextNetwork: NetworkState;
-    let output: string[];
+    let net = network;
+    let lines = session.lines[active] ?? [];
     let pending: PendingPython | undefined;
-    if (device) {
-      echoPrompt = prompt(device);
-      masked = isMaskedInput(device);
-      ({ network: nextNetwork, output } = executeOn(network, active, line));
-      keep = line.trimEnd().endsWith('?') && !masked;
-    } else {
-      echoPrompt = hostPrompt(host!);
-      masked = hostMaskedInput(host!);
-      ({ network: nextNetwork, output, pending } = executeHost(network, active, line));
+    for (const line of typed) {
+      const dev = net.devices[active];
+      const h = net.hosts[active];
+      let echoPrompt: string;
+      let masked = false;
+      let output: string[];
+      if (dev) {
+        echoPrompt = prompt(dev);
+        masked = isMaskedInput(dev);
+        ({ network: net, output } = executeOn(net, active, line));
+        keep = line.trimEnd().endsWith('?') && !masked;
+      } else {
+        echoPrompt = hostPrompt(h!);
+        masked = hostMaskedInput(h!);
+        ({ network: net, output, pending } = executeHost(net, active, line));
+      }
+      const echo: TermLine = { kind: 'input', prompt: echoPrompt, text: masked ? '' : line };
+      const isClear = !dev && /^(cls|clear)$/i.test(line.trim());
+      lines = isClear ? [] : [...lines, echo, ...output.map((text): TermLine => ({ kind: 'output', text }))].slice(-2000);
+      // python3 runs asynchronously, so a paste stops at the first script it starts.
+      if (pending) break;
     }
-    const echo: TermLine = { kind: 'input', prompt: echoPrompt, text: masked ? '' : line };
-    const outLines: TermLine[] = output.map((text) => ({ kind: 'output', text }));
-    const isClear = !device && /^(cls|clear)$/i.test(line.trim());
-    setSession({ ...session, network: nextNetwork, lines: { ...session.lines, [active]: isClear ? [] : [...(session.lines[active] ?? []), echo, ...outLines].slice(-2000) } });
+    setSession({ ...session, network: net, lines: { ...session.lines, [active]: lines } });
     if (pending) runPending(active, pending);
     return keep;
+  }
+
+  function onSubmit(line: string): boolean {
+    return runLines([line]);
   }
 
   function reset() {
@@ -322,6 +343,8 @@ export default function LabPage() {
               onSubmit={onSubmit}
               onTab={(line) => (device ? tabComplete(device, line) : null)}
               onClear={() => setSession({ ...session, lines: { ...session.lines, [active]: [] } })}
+              questionHelp={Boolean(device)}
+              onPasteLines={device ? undefined : (pasted) => void runLines(pasted)}
               modeLabel={
                 pythonBusy
                   ? pythonBusy
@@ -330,7 +353,11 @@ export default function LabPage() {
                       ? 'password'
                       : device.mode
                     : host?.os === 'linux'
-                      ? host.linux?.pending?.kind === 'sql'
+                      ? host.linux?.pending?.kind === 'terraform'
+                        ? host.linux.pending.console
+                          ? 'terraform console (exit to leave)'
+                          : 'terraform (waiting for an answer)'
+                        : host.linux?.pending?.kind === 'sql'
                         ? host.linux.databases?.[host.linux.pending.db]?.partial
                           ? 'psql (continue…)'
                           : 'psql'
@@ -346,7 +373,7 @@ export default function LabPage() {
         </section>
 
         <aside className="min-h-0 overflow-y-auto border-t border-border bg-surface/60 p-4 lg:border-l lg:border-t-0">
-          <Topology network={network} active={active} onSelect={(id) => setSession({ ...session, active: id })} />
+          {host?.linux?.cloud ? <CloudPanel network={network} hostId={active} /> : <Topology network={network} active={active} onSelect={(id) => setSession({ ...session, active: id })} />}
         </aside>
       </main>
 

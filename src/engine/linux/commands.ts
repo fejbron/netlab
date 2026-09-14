@@ -37,6 +37,8 @@ import {
 } from './fs';
 import { fail, ok, type CmdCtx, type CmdResult, type Command } from './shell';
 import { formatResult, runSqlLine } from '../sql';
+import { runTerraform } from '../terraform/cli';
+import { netcloudCli } from '../terraform/cloud';
 import { loadNginx, makeCertificate, makePrivateKey, opensslDate, parseCertificate, runtime, servicePorts, testNginx } from './web';
 import { APACHE_MODULES, apacheModelFromDisk, enabledModules, installApacheFiles, loadApache, testApache } from './apache';
 import { installAppFiles, installNginxFiles } from './fs';
@@ -1904,6 +1906,24 @@ export const COMMANDS: Record<string, Command> = {
       }
       if (sub === 's_client') return fail(['openssl s_client: interactive TLS sessions are not simulated; use curl -k -v https://... to test a TLS listener.']);
       return fail([`Invalid command '${sub ?? ''}'; type "help" for a list.`]);
+    },
+  },
+  terraform: {
+    help: 'infrastructure as code: init, validate, fmt, plan, apply, destroy, output, state, import, workspace',
+    run: (ctx) => {
+      const lx = ctx.state;
+      if (!lx.packages.includes('terraform')) return fail(['bash: terraform: command not found'], 127);
+      const r = runTerraform(lx, ctx.args, { ...lx.env }, lx.cwd, ctx.stdin);
+      if (r.pending) lx.pending = r.pending;
+      return { out: r.out, err: r.err, code: r.code };
+    },
+  },
+  netcloud: {
+    help: 'NetLab Cloud command line: list and change networks, instances and buckets',
+    run: (ctx) => {
+      const lx = ctx.state;
+      if (!lx.cloud) return fail(['bash: netcloud: command not found'], 127);
+      return netcloudCli(lx.cloud, ctx.args, lx.env, lx.user);
     },
   },
   python3: {
