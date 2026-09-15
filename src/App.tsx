@@ -1,4 +1,5 @@
 import { Link, Route, Routes } from 'react-router-dom';
+import { Analytics } from '@vercel/analytics/react';
 import AccountPage from './pages/AccountPage';
 import { PathRoute } from './pages/DashboardPage';
 import HomePage from './pages/HomePage';
@@ -30,6 +31,7 @@ export default function App() {
           <Route path="/leaderboard" element={<LeaderboardPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
+        <Analytics />
       </ProgressProvider>
     </AuthProvider>
   );
