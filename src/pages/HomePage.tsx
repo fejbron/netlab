@@ -13,7 +13,9 @@ import { maxTotalPoints } from '../lib/points';
  * What the terminal types. Every command and every line of output below is what the
  * engines actually produce, including the two mistakes: the point of the page is that
  * the errors are real, so inventing them here would be the wrong kind of demonstration.
- * The Terraform plan is trimmed to the resource and the summary; the lines kept are verbatim.
+ * The Terraform plan is trimmed to the resource and the summary, and the Ansible run to one
+ * task and the recap (whose real line also carries skipped, rescued and ignored counts);
+ * the lines kept are otherwise verbatim.
  */
 const SCENES: TerminalScene[] = [
   {
@@ -51,6 +53,20 @@ const SCENES: TerminalScene[] = [
       {
         cmd: 'terraform plan',
         out: ['  # random_pet.server must be replaced', '-/+ resource "random_pet" "server" {', '      ~ id     = "lucky-falcon" -> (known after apply)', '      ~ length = 2 -> 3 # forces replacement', '        # (1 unchanged attribute hidden)', '    }', '', 'Plan: 1 to add, 0 to change, 1 to destroy.'],
+      },
+    ],
+  },
+  {
+    label: 'Ansible',
+    prompt: 'student@ops1:~/ansible$',
+    steps: [
+      {
+        cmd: 'ansible-playbook web.yml',
+        out: ['TASK [Install nginx] **********************************************', 'changed: [web1]', 'changed: [web2]', '', 'PLAY RECAP ********************************************************', 'web1                       : ok=4    changed=3    failed=0', 'web2                       : ok=4    changed=3    failed=0'],
+      },
+      {
+        cmd: 'ansible-playbook web.yml',
+        out: ['TASK [Install nginx] **********************************************', 'ok: [web1]', 'ok: [web2]', '', 'PLAY RECAP ********************************************************', 'web1                       : ok=4    changed=0    failed=0', 'web2                       : ok=4    changed=0    failed=0'],
       },
     ],
   },
@@ -155,9 +171,9 @@ function Topology() {
 }
 
 const FEATURES = [
-  { glyph: NF.terminal, title: 'Real engines, not screenshots', body: 'A command resolver with prefix abbreviation and context help, a packet-forwarding simulation, a Bash subset over a permissioned filesystem, a SQL parser and planner written from scratch, and a Terraform plan and apply engine with its own HCL parser.' },
-  { glyph: NF.warning, title: 'Errors that teach', body: "Mistype a command and you get the caret and the marker. Break an nginx file and nginx -t names the file and the line. Break a constraint and the database names the key that already exists. Change the wrong argument and terraform plan marks the line that forces a replacement." },
-  { glyph: NF.check, title: 'Graded as you type', body: 'Objectives check the state of the device, the filesystem, the database or the cloud, not the text you typed, so any route to the right answer counts.' },
+  { glyph: NF.terminal, title: 'Real engines, not screenshots', body: 'A command resolver with prefix abbreviation and context help, a packet-forwarding simulation, a Bash subset over a permissioned filesystem, a SQL parser and planner written from scratch, a Terraform plan and apply engine with its own HCL parser, and an Ansible runner with its own YAML and Jinja2 implementations.' },
+  { glyph: NF.warning, title: 'Errors that teach', body: "Mistype a command and you get the caret and the marker. Break an nginx file and nginx -t names the file and the line. Break a constraint and the database names the key that already exists. Change the wrong argument and terraform plan marks the line that forces a replacement. Indent a playbook wrongly and the YAML error names the line and points at the column." },
+  { glyph: NF.check, title: 'Graded as you type', body: 'Objectives check the state of the device, the filesystem, the database or the cloud, not the text you typed, so any route to the right answer counts. An Ansible playbook is graded by running it again: if the second run changes anything, it does not pass.' },
   { glyph: NF.cloud, title: 'Nothing to install', body: 'It all runs in the browser. No virtual machines, no images to download, no licences. Open a tab and start.' },
 ];
 

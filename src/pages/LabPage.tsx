@@ -39,6 +39,15 @@ function welcome(title: string, network: NetworkState, nodeId: string): TermLine
         { kind: 'output', text: '' },
       ];
     }
+    if (host.linux.packages.includes('ansible')) {
+      return [
+        { kind: 'output', text: `Welcome to NetLab: ${title}` },
+        { kind: 'output', text: `Ubuntu 24.04.1 LTS on ${host.linux.hostname} (simulated). Ansible 2.16.3 is installed; you are in ${host.linux.cwd.replace(/^\/home\/[^/]+/, '~')}.` },
+        { kind: 'output', text: "No editor here: write playbooks with cat > site.yml << 'EOF' (quote EOF), or paste them in." },
+        { kind: 'output', text: 'The other tabs are the machines you manage; you reach them through Ansible.' },
+        { kind: 'output', text: '' },
+      ];
+    }
     return [
       { kind: 'output', text: `Welcome to NetLab: ${title}` },
       { kind: 'output', text: `Ubuntu 24.04.1 LTS on ${host.linux.hostname} (simulated). Logged in as ${host.linux.user}.` },
@@ -357,6 +366,8 @@ export default function LabPage() {
                         ? host.linux.pending.console
                           ? 'terraform console (exit to leave)'
                           : 'terraform (waiting for an answer)'
+                        : host.linux?.pending?.kind === 'ansible' || host.linux?.pending?.kind === 'ssh'
+                          ? 'password'
                         : host.linux?.pending?.kind === 'sql'
                         ? host.linux.databases?.[host.linux.pending.db]?.partial
                           ? 'psql (continue…)'

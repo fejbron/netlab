@@ -34,12 +34,19 @@ import { tfModulesLabs } from './labs/tf-modules';
 import { tfStateLabs } from './labs/tf-state';
 import { tfHcpLabs } from './labs/tf-hcp';
 import { tfExamLabs } from './labs/tf-exams';
+import { anBasicsLabs } from './labs/an-basics';
+import { anPlaybookLabs } from './labs/an-playbooks';
+import { anFilesLabs } from './labs/an-files';
+import { anSystemLabs } from './labs/an-system';
+import { anRolesLabs } from './labs/an-roles';
+import { anNetworkLabs } from './labs/an-network';
+import { anExamLabs } from './labs/an-exams';
 import { paths } from './paths';
 
 export type { Lab, Module, Difficulty } from './types';
 export { BLUEPRINT, EXAM_DOMAINS, EXAM_TOPICS, PATH_OVERVIEW, domainCoverage, topicDomain, byTopicCode } from './blueprint';
 export type { ExamDomain, DomainCoverage } from './blueprint';
-export { paths, getPath, pathUrl, ccnaPath, linuxPath, sqlPath, terraformPath, LFCS_DOMAINS, LFCS_TOPICS, SQL_DOMAINS, SQL_TOPICS, TF_DOMAINS, TF_TOPICS } from './paths';
+export { paths, getPath, pathUrl, ccnaPath, linuxPath, sqlPath, terraformPath, ansiblePath, LFCS_DOMAINS, LFCS_TOPICS, SQL_DOMAINS, SQL_TOPICS, TF_DOMAINS, TF_TOPICS, AN_DOMAINS, AN_TOPICS } from './paths';
 export type { LearningPath, PathBlueprint } from './paths';
 
 export const modules: Module[] = [
@@ -108,6 +115,15 @@ export const modules: Module[] = [
   { id: 'tf-state', pathId: 'terraform', order: 5, title: 'Manage State and Troubleshoot', description: 'Inspect and rename state, resolve drift, import hand-built infrastructure, move state to a remote backend, break a stale lock, run environments as workspaces, and debug with verbose logging.', examTopics: ['6.a', '6.b', '6.c', '6.d', '7.a', '7.b', '7.c'] },
   { id: 'tf-hcp', pathId: 'terraform', order: 6, title: 'HCP Terraform', description: 'Log in and run plans and applies remotely, organise workspaces by project and tag, and meet the policy checks that govern what a run may build.', examTopics: ['8.a', '8.b', '8.c', '8.d'] },
   { id: 'tf-exams', pathId: 'terraform', order: 7, title: 'Terraform Exams', description: 'Two capstones: build a production network from a written specification, and take over an inherited estate with a leaked secret, drift, hand-built resources and local state.', examTopics: ['2.a', '3.e', '3.g', '4.c', '4.f', '4.h', '6.c', '6.d', '7.a'] },
+
+  // --- Ansible
+  { id: 'an-basics', pathId: 'ansible', order: 1, title: 'Meet Ansible', description: 'Build a control node, distribute SSH keys, write an inventory with groups and variables, and do real work with ad hoc commands.', examTopics: ['1.a', '1.b', '1.g', '1.i', '3.a', '3.b', '3.c', '3.d', '4.a', '4.b', '4.d'] },
+  { id: 'an-playbooks', pathId: 'ansible', order: 2, title: 'Playbooks, Variables and Facts', description: 'Write plays that are safe to run twice: variables and their precedence, facts, loops and conditions, registered results, handlers and error handling.', examTopics: ['1.c', '1.d', '1.e', '1.f', '6.a', '6.b', '6.c', '6.d', '6.e', '7.a', '7.b'] },
+  { id: 'an-files', pathId: 'ansible', order: 3, title: 'Files, Templates and Vault', description: 'Deploy files and directories, edit a line of someone else’s configuration, render Jinja2 templates per host, and keep secrets out of Git with Ansible Vault.', examTopics: ['4.c', '7.f', '8.a', '8.b'] },
+  { id: 'an-system', pathId: 'ansible', order: 4, title: 'System Administration', description: 'The everyday work: packages and services, accounts and keys, scheduled tasks, firewall rules through a collection, and shell scripts that call ad hoc commands.', examTopics: ['5.a', '5.b', '7.a', '7.b', '7.c', '7.h', '7.i', '7.j'] },
+  { id: 'an-roles', pathId: 'ansible', order: 5, title: 'Roles and Collections', description: 'Refactor a playbook into a role with defaults, templates and handlers, reuse it with different values, and install roles and collections from Galaxy with a requirements file.', examTopics: ['1.h', '2.a', '2.b', '2.c', '2.d'] },
+  { id: 'an-network', pathId: 'ansible', order: 6, title: 'Network Devices', description: 'Beyond RHCE: reach Cisco IOS devices with network_cli and the cisco.ios collection, configure them idempotently, and drive them all from one template.', examTopics: ['1.a', '1.b', '2.c', '8.a'] },
+  { id: 'an-exams', pathId: 'ansible', order: 7, title: 'Ansible Exams', description: 'Two capstones: automate a three-server environment from a written specification, and take over a playbook that works once and make it something you would schedule.', examTopics: ['1.a', '1.h', '2.a', '6.e', '7.a', '7.b', '7.h', '7.j', '8.a', '8.b'] },
 ];
 
 const pathOrder = (pathId: string) => paths.findIndex((p) => p.id === pathId);
@@ -147,6 +163,13 @@ export const labs: Lab[] = [
   ...tfStateLabs,
   ...tfHcpLabs,
   ...tfExamLabs,
+  ...anBasicsLabs,
+  ...anPlaybookLabs,
+  ...anFilesLabs,
+  ...anSystemLabs,
+  ...anRolesLabs,
+  ...anNetworkLabs,
+  ...anExamLabs,
 ].sort((a, b) => {
   const ma = modules.find((m) => m.id === a.moduleId);
   const mb = modules.find((m) => m.id === b.moduleId);

@@ -38,6 +38,8 @@ import {
 import { fail, ok, type CmdCtx, type CmdResult, type Command } from './shell';
 import { formatResult, runSqlLine } from '../sql';
 import { runTerraform } from '../terraform/cli';
+import { runAnsible } from '../ansible/cli';
+import { runSshCommand } from './ssh';
 import { netcloudCli } from '../terraform/cloud';
 import { loadNginx, makeCertificate, makePrivateKey, opensslDate, parseCertificate, runtime, servicePorts, testNginx } from './web';
 import { APACHE_MODULES, apacheModelFromDisk, enabledModules, installApacheFiles, loadApache, testApache } from './apache';
@@ -1697,7 +1699,6 @@ export const COMMANDS: Record<string, Command> = {
   },
   dig: { help: 'DNS lookup utility', run: (ctx) => ok([`; <<>> DiG 9.18 <<>> ${ctx.args[0] ?? ''}`, ';; ->>HEADER<<- opcode: QUERY, status: SERVFAIL', '(No DNS server is reachable from this lab network.)']) },
   nslookup: { help: 'query DNS', run: () => fail([';; connection timed out; no servers could be reached'], 1) },
-  ssh: { help: 'OpenSSH remote login client', run: (ctx) => fail([`ssh: connect to host ${ctx.args.filter((a) => !a.startsWith('-')).pop() ?? ''} port 22: interactive sessions are not simulated. Use the device tabs above to open another console.`], 255) },
 
   man: {
     help: 'an interface to the system reference manuals',
@@ -1926,6 +1927,46 @@ export const COMMANDS: Record<string, Command> = {
       return netcloudCli(lx.cloud, ctx.args, lx.env, lx.user);
     },
   },
+  ssh: {
+    help: 'OpenSSH remote login client',
+    run: (ctx) => sshCommand(ctx, 'ssh'),
+  },
+  'ssh-keygen': {
+    help: 'authentication key generation',
+    run: (ctx) => sshCommand(ctx, 'ssh-keygen'),
+  },
+  'ssh-copy-id': {
+    help: 'install your public key in a remote machine authorized_keys',
+    run: (ctx) => sshCommand(ctx, 'ssh-copy-id'),
+  },
+  ansible: {
+    help: 'run a task on a set of hosts without writing a playbook',
+    run: (ctx) => ansibleCommand(ctx, 'ansible'),
+  },
+  'ansible-playbook': {
+    help: 'run an Ansible playbook',
+    run: (ctx) => ansibleCommand(ctx, 'ansible-playbook'),
+  },
+  'ansible-inventory': {
+    help: 'show the inventory Ansible would use (--list, --graph, --host)',
+    run: (ctx) => ansibleCommand(ctx, 'ansible-inventory'),
+  },
+  'ansible-vault': {
+    help: 'encrypt and decrypt files and strings with a vault password',
+    run: (ctx) => ansibleCommand(ctx, 'ansible-vault'),
+  },
+  'ansible-galaxy': {
+    help: 'install collections and roles, and create a role skeleton',
+    run: (ctx) => ansibleCommand(ctx, 'ansible-galaxy'),
+  },
+  'ansible-doc': {
+    help: 'show documentation for a module',
+    run: (ctx) => ansibleCommand(ctx, 'ansible-doc'),
+  },
+  'ansible-config': {
+    help: 'view the Ansible configuration in effect',
+    run: (ctx) => ansibleCommand(ctx, 'ansible-config'),
+  },
   python3: {
     help: 'an interpreted, interactive, object-oriented programming language',
     run: (ctx) => {
@@ -2123,6 +2164,23 @@ function networkOf(ip: string, prefix: number): string {
 function broadcast(ip: string, prefix: number): string {
   const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
   return intToIp(((ipToInt(ip) & mask) | (~mask >>> 0)) >>> 0);
+}
+
+/** ansible and its friends share one entry point; a password prompt becomes a pending state. */
+function ansibleCommand(ctx: CmdCtx, name: string): CmdResult {
+  const lx = ctx.state;
+  if (!lx.packages.includes('ansible')) return fail([`bash: ${name}: command not found`], 127);
+  const r = runAnsible(lx, ctx.network, ctx.hostId, name, ctx.args, { ...lx.env }, lx.cwd, [], ctx.stdin);
+  if (r.pending) lx.pending = r.pending;
+  return { out: r.out, err: r.err, code: r.code };
+}
+
+function sshCommand(ctx: CmdCtx, name: string): CmdResult {
+  const lx = ctx.state;
+  const lines = ctx.stdin ? ctx.stdin.replace(/\n$/, '').split('\n') : [];
+  const r = runSshCommand(lx, ctx.network, ctx.hostId, name, ctx.args, lines);
+  if (r.pending) lx.pending = r.pending;
+  return { out: r.out, err: r.err, code: r.code };
 }
 
 export const LINUX_COMMAND_NAMES = Object.keys(COMMANDS);

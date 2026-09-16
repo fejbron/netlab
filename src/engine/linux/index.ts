@@ -8,6 +8,8 @@ import { findUser, homeOf, writeFile, type LinuxState } from './fs';
 import { runLine, type PendingPython } from './shell';
 import { runSqlLine, sqlPrompt } from '../sql';
 import { resumeTerraform } from '../terraform/cli';
+import { resumeAnsible } from '../ansible/cli';
+import { resumeSsh } from './ssh';
 
 export type { LinuxState, LinuxSpec, FsNode, LinuxUser, LinuxGroup, LinuxService, LinuxProcess, PythonRun } from './fs';
 export { createLinuxState, normalizePath, listDir, getNode, readFile, modeString, octal } from './fs';
@@ -47,7 +49,7 @@ export function linuxPrompt(host: HostState): string {
     const db = lx.databases?.[lx.pending.db];
     if (db) return sqlPrompt(db);
   }
-  if (lx.pending?.kind === 'terraform') return lx.pending.prompt;
+  if (lx.pending?.kind === 'terraform' || lx.pending?.kind === 'ansible' || lx.pending?.kind === 'ssh') return lx.pending.prompt;
   if (lx.pending?.kind === 'script') return '> ';
   return `${lx.user}@${lx.hostname}:${shortCwd(lx)}${lx.user === 'root' ? '#' : '$'} `;
 }
@@ -55,7 +57,7 @@ export function linuxPrompt(host: HostState): string {
 /** True while the host expects a password rather than a command (terminal should mask input). */
 export function linuxMaskedInput(host: HostState): boolean {
   const p = host.linux?.pending;
-  return p?.kind === 'password' || (p?.kind === 'terraform' && Boolean(p.masked));
+  return p?.kind === 'password' || ((p?.kind === 'terraform' || p?.kind === 'ansible' || p?.kind === 'ssh') && Boolean(p.masked));
 }
 
 const MAX_OUTPUT_MEMORY = 600;
@@ -96,6 +98,7 @@ export function executeLinux(prev: NetworkState, hostId: string, rawLine: string
   }
   if (lx.pending?.kind === 'sql') return sqlSession(network, h, lx, lx.pending.db, rawLine);
   if (lx.pending?.kind === 'terraform') return terraformSession(network, h, lx, rawLine);
+  if (lx.pending?.kind === 'ansible' || lx.pending?.kind === 'ssh') return ansibleSession(network, h, lx, rawLine);
   const line = rawLine.replace(/\s+$/, '');
   if (lx.pending?.kind === 'script') {
     const text = lx.pending.text + '\n' + line;
@@ -141,6 +144,21 @@ function sqlSession(network: NetworkState, h: HostState, lx: LinuxState, name: s
   if (r.quit) lx.pending = undefined;
   remember(lx, output);
   return { network, output: output.length ? [...output, ''] : [] };
+}
+
+/** An answer to a password prompt from ansible, ansible-vault or ssh. */
+function ansibleSession(network: NetworkState, h: HostState, lx: LinuxState, rawLine: string): LinuxExecResult {
+  const pending = lx.pending;
+  if (pending?.kind !== 'ansible' && pending?.kind !== 'ssh') return { network, output: [] };
+  lx.pending = undefined;
+  const line = rawLine.replace(/\s+$/, '');
+  if (!pending.masked && line.trim()) h.commandHistory.push(line.trim());
+  const r = pending.kind === 'ansible' ? resumeAnsible(lx, network, h.id, pending, line) : resumeSsh(lx, network, h.id, pending, line);
+  if (r.pending) lx.pending = r.pending;
+  lx.lastExit = r.code;
+  const output = [...r.out, ...r.err];
+  remember(lx, output);
+  return { network, output };
 }
 
 /** An answer to a terraform question, or a line typed at terraform console. */

@@ -7,6 +7,8 @@ import { installApacheFiles, loadApache } from './apache';
 import { createSqlState, type SqlSpec, type SqlState } from '../sql';
 import { createCloud, type CloudAccount, type CloudSpec } from '../terraform/cloud';
 import type { TfPending } from '../terraform/cli';
+import type { AnsiblePending, AnsibleRun } from '../ansible/cli';
+import type { SshPending } from './ssh';
 import { loadNginx } from './web';
 
 export interface FsNode {
@@ -97,7 +99,10 @@ export type LinuxPending =
   /** The learner is inside psql, so lines are SQL rather than shell commands. */
   | { kind: 'sql'; db: string }
   /** terraform is waiting for an answer (apply approval, a variable, login), or console is open. */
-  | TfPending;
+  | TfPending
+  /** ansible or ssh is waiting for a password. */
+  | AnsiblePending
+  | SshPending;
 
 export interface LinuxState {
   hostname: string;
@@ -130,6 +135,8 @@ export interface LinuxState {
   databases?: Record<string, SqlState>;
   /** The NetLab Cloud account this host's terraform and netcloud commands reach. */
   cloud?: CloudAccount;
+  /** Every ansible-playbook and ad-hoc run on this host, for grading. */
+  ansibleRuns?: AnsibleRun[];
   /** Every terraform command run on this host, for grading. */
   terraformRuns?: Array<{ command: string; args: string[]; code: number; dir: string; workspace: string; add?: number; change?: number; destroy?: number; imported?: number; noChanges?: boolean; remote?: boolean }>;
 }
@@ -210,6 +217,7 @@ export const KNOWN_PACKAGES: Record<string, { service?: string; description: str
   vim: { description: 'Vi IMproved - enhanced vi editor' },
   'net-tools': { description: 'NET-3 networking toolkit' },
   terraform: { description: 'Infrastructure as code tool from HashiCorp' },
+  ansible: { description: 'Configuration management, deployment, and task execution system' },
 };
 
 // ---------------------------------------------------------------------------
@@ -463,6 +471,7 @@ function baseFiles(hostname: string): Record<string, FsNode> {
     '/etc': d(),
     '/etc/ssh': d(),
     '/etc/ssh/sshd_config': f('# This is the sshd server system-wide configuration file.\nInclude /etc/ssh/sshd_config.d/*.conf\nPort 22\n#PermitRootLogin prohibit-password\nPasswordAuthentication yes\nX11Forwarding yes\n'),
+    '/etc/environment': f('PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n'),
     '/etc/hosts': f(`127.0.0.1 localhost\n127.0.1.1 ${hostname}\n\n::1 ip6-localhost ip6-loopback\n`),
     '/etc/os-release': f('PRETTY_NAME="Ubuntu 24.04.1 LTS"\nNAME="Ubuntu"\nVERSION_ID="24.04"\nVERSION="24.04.1 LTS (Noble Numbat)"\nID=ubuntu\nID_LIKE=debian\nHOME_URL="https://www.ubuntu.com/"\n'),
     '/etc/motd': f('Welcome to NetLab Linux. Type help for the commands this shell supports.\n'),

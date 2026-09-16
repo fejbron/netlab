@@ -313,7 +313,108 @@ export const terraformPath: LearningPath = {
   },
 };
 
-export const paths: LearningPath[] = [ccnaPath, linuxPath, sqlPath, terraformPath];
+export const AN_DOMAINS: ExamDomain[] = [
+  { id: '1', title: 'Understand core components of Ansible', weight: 23 },
+  { id: '2', title: 'Use roles and Ansible Content Collections', weight: 10 },
+  { id: '3', title: 'Install and configure an Ansible control node', weight: 10 },
+  { id: '4', title: 'Configure Ansible managed nodes', weight: 10 },
+  { id: '5', title: 'Script administration tasks', weight: 5 },
+  { id: '6', title: 'Create Ansible plays and playbooks', weight: 12 },
+  { id: '7', title: 'Automate standard RHCSA tasks using Ansible modules', weight: 25 },
+  { id: '8', title: 'Manage content', weight: 5 },
+];
+
+export const AN_TOPICS: Record<string, string> = {
+  '1.a': 'Inventories',
+  '1.b': 'Modules',
+  '1.c': 'Variables',
+  '1.d': 'Facts',
+  '1.e': 'Plays',
+  '1.f': 'Playbooks',
+  '1.g': 'Configuration files',
+  '1.h': 'Roles',
+  '1.i': 'Use provided documentation to look up specific information about Ansible modules and commands',
+  '2.a': 'Create and work with roles',
+  '2.b': 'Install roles and use them in playbooks',
+  '2.c': 'Install Content Collections and use them in playbooks',
+  '2.d': 'Obtain a set of related roles, supplementary modules and other content from content collections, and use them in playbooks',
+  '3.a': 'Install required packages',
+  '3.b': 'Create a static host inventory file',
+  '3.c': 'Create a configuration file',
+  '3.d': 'Create and use static inventories to define groups of hosts',
+  '4.a': 'Create and distribute SSH keys to managed nodes',
+  '4.b': 'Configure privilege escalation on managed nodes',
+  '4.c': 'Deploy files to managed nodes',
+  '4.d': 'Validate a working configuration using ad hoc Ansible commands',
+  '5.a': 'Create simple shell scripts',
+  '5.b': 'Create simple shell scripts that run ad hoc Ansible commands',
+  '6.a': 'Know how to work with commonly used Ansible modules',
+  '6.b': 'Use variables to retrieve the results of running a command',
+  '6.c': 'Use conditionals to control play execution',
+  '6.d': 'Configure error handling',
+  '6.e': 'Create playbooks to configure systems to a specified state',
+  '7.a': 'Software packages and repositories',
+  '7.b': 'Services',
+  '7.c': 'Firewall rules',
+  '7.d': 'File systems',
+  '7.e': 'Storage devices',
+  '7.f': 'File content',
+  '7.g': 'Archiving',
+  '7.h': 'Task scheduling',
+  '7.i': 'Security',
+  '7.j': 'Users and groups',
+  '8.a': 'Create and use templates to create customized configuration files',
+  '8.b': 'Use Ansible Vault in playbooks to protect sensitive data',
+};
+
+export const ansiblePath: LearningPath = {
+  id: 'ansible',
+  title: 'Ansible Automation',
+  shortTitle: 'Ansible',
+  scopeLabel: 'Configuration management path',
+  levelLabel: 'Engineer',
+  eyebrow: 'Ansible · in your browser',
+  summary:
+    'Learn Ansible by automating a real fleet: build an inventory, run ad hoc commands over SSH, write playbooks that are safe to run twice, template configuration, protect secrets with Vault, package work as roles — and then point the same tool at Cisco devices.',
+  outcomes: [
+    'Set up a control node: install Ansible, write ansible.cfg, distribute SSH keys and prove the managed nodes answer.',
+    'Write static inventories with groups, children and variables, and target hosts with patterns.',
+    'Run ad hoc commands for the jobs that do not deserve a playbook, and read what they report.',
+    'Write playbooks with variables, facts, conditionals, loops, handlers, blocks and error handling — and make every one of them idempotent.',
+    'Manage packages, services, users, groups, files, file content, archives and scheduled tasks with the right module rather than shell.',
+    'Template configuration files with Jinja2, and keep secrets out of Git with Ansible Vault.',
+    'Package work as roles, install roles and collections, and use them from a playbook.',
+    'Automate Cisco IOS devices with the cisco.ios collection — beyond RHCE, but the reason many network engineers learn Ansible.',
+  ],
+  audience: 'System and network engineers automating configuration, and learners preparing for the Red Hat Certified Engineer (EX294) exam.',
+  prerequisites:
+    'Comfort at a Linux shell and with SSH (the Linux path covers both). The managed nodes here run Ubuntu, not RHEL: see the note below for what that means for EX294 preparation.',
+  skillTags: ['Inventories', 'Ad hoc commands', 'Playbooks', 'Idempotency', 'Jinja2 templates', 'Vault', 'Roles and collections', 'cisco.ios'],
+  blueprint: {
+    version: 'Red Hat Certified Engineer (EX294)',
+    reviewedAt: '2026-09-16',
+    facts: [
+      { label: 'Exam', value: 'EX294' },
+      { label: 'Format', value: 'Performance-based' },
+      { label: 'Duration', value: '4 hours' },
+      { label: 'Objectives', value: '8' },
+    ],
+    sources: [
+      { label: 'EX294 exam objectives', url: 'https://www.redhat.com/en/services/training/ex294-red-hat-certified-engineer-rhce-exam-red-hat-enterprise-linux-8-exam' },
+      { label: 'Ansible documentation', url: 'https://docs.ansible.com/ansible/latest/' },
+    ],
+    intro:
+      'Red Hat publishes eight objective groups for EX294, each a list of skills (written 1.a, 1.b and so on here). Every NetLab module is tagged with the skills it practises, so the bars show how far you are through the hands-on part of each group. EX294 is a practical exam: you automate real tasks on real machines, which is exactly what these labs ask you to do.',
+    weightingNote:
+      'Red Hat does not publish a weighting for the objectives. The percentages here are each group’s share of the published skills, which is NetLab’s approximation rather than Red Hat’s. Parts of group 7 are honestly outside this simulator: the managed nodes run Ubuntu, so firewalld and RHEL package repositories are replaced by ufw and apt, and file systems, storage devices and archiving (7.d, 7.e, 7.g) have no labs, so those three skills are not listed under group 7 below. The storage modules exist but refuse to run and say why, rather than pretending to work.',
+    trademarkNotice:
+      'NetLab is an independent, open-source simulator and is not affiliated with, authorized, sponsored, or endorsed by Red Hat or Cisco. Red Hat, RHCE and Ansible are trademarks of Red Hat, Inc. Cisco and IOS are trademarks of Cisco Systems, Inc. The labs are original and are not official training or a guarantee of exam readiness.',
+    domains: AN_DOMAINS,
+    topics: AN_TOPICS,
+  },
+};
+
+export const paths: LearningPath[] = [ccnaPath, linuxPath, sqlPath, terraformPath, ansiblePath];
 
 export function getPath(id: string): LearningPath | undefined {
   return paths.find((p) => p.id === id);

@@ -44,6 +44,7 @@ export const NF = {
   hdd: '',
   wifi: '',
   code: '',
+  gear: '',
 } as const;
 
 export type Glyph = (typeof NF)[keyof typeof NF];
