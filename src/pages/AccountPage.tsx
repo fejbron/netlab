@@ -11,7 +11,70 @@ import { authCallback } from '../lib/supabase';
 import { fetchProfile, updateProfile, type Profile } from '../lib/leaderboard';
 import { useProgress } from '../lib/progressStore';
 
-type Tab = 'signin' | 'signup';
+/** 'reset' is reached from "Forgot your password?", not from the tab bar. */
+type Tab = 'signin' | 'signup' | 'reset';
+
+/**
+ * Shown after following a reset link. supabase-js has already signed the learner in with
+ * a short-lived recovery session; saving here is what actually changes the password.
+ */
+function NewPasswordForm({ onDone }: { onDone: () => void }) {
+  const auth = useAuth();
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (password !== confirm) {
+      setError('The two passwords do not match.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await auth.updatePassword(password);
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="card p-6">
+      <p className="label text-accent">
+        <Icon g={NF.lock} className="mr-1.5" />
+        Reset your password
+      </p>
+      <h1 className="display mt-1 text-2xl text-fg-bright">Choose a new password</h1>
+      <p className="mt-1 text-sm leading-6 text-muted">
+        For <span className="font-mono text-fg">{auth.user?.email}</span>. At least 8 characters.
+      </p>
+      <form onSubmit={submit} className="mt-5 flex flex-col gap-3">
+        <label className="flex flex-col gap-1 text-xs text-muted">
+          New password
+          <input type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} className="input" />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-muted">
+          Repeat it
+          <input type="password" required minLength={8} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="input" />
+        </label>
+        {error && (
+          <p className="text-sm text-danger">
+            <Icon g={NF.warning} className="mr-1.5" />
+            {error}
+          </p>
+        )}
+        <button type="submit" disabled={busy} className="btn btn-primary mt-1 justify-center py-2.5">
+          {busy ? 'Please wait…' : 'Save the new password'}
+        </button>
+      </form>
+    </section>
+  );
+}
 
 /** Public name and leaderboard opt-out for the signed-in learner. */
 function ProfileSettings({ userId, fallbackName }: { userId: string; fallbackName: string }) {
@@ -105,6 +168,7 @@ export default function AccountPage() {
   const [error, setError] = useState<string | null>(authCallback.kind === 'error' ? callbackMessage(authCallback) : null);
   const [notice, setNotice] = useState<string | null>(null);
   const [offerResend, setOfferResend] = useState(authCallback.kind === 'error' && canResend(authCallback));
+  const [passwordChanged, setPasswordChanged] = useState(false);
 
   // Take the one-time tokens and any error out of the address bar, keeping ?next.
   useEffect(() => {
@@ -117,8 +181,8 @@ export default function AccountPage() {
 
   // A confirmed link signs the learner in; send them on to whatever they were trying to reach.
   useEffect(() => {
-    if (authCallback.kind === 'confirmed' && !auth.loading && auth.user && next !== '/') navigate(next, { replace: true });
-  }, [auth.loading, auth.user, navigate, next]);
+    if (authCallback.kind === 'confirmed' && !auth.loading && auth.user && !auth.recovering && next !== '/') navigate(next, { replace: true });
+  }, [auth.loading, auth.user, auth.recovering, navigate, next]);
 
   // Confirming in a different browser from the one that signed up cannot restore the session there,
   // but the account itself is now confirmed, so say so rather than showing a bare form.
@@ -133,6 +197,10 @@ export default function AccountPage() {
       if (tab === 'signin') {
         await auth.signIn(email.trim(), password);
         navigate(next);
+      } else if (tab === 'reset') {
+        await auth.requestPasswordReset(email.trim());
+        // Supabase answers the same whether or not the address has an account, so say the same.
+        setNotice('If there is an account for that address, a reset link is on its way. Open the newest email within the hour; it brings you back here to choose a new password.');
       } else {
         const needsConfirm = await auth.signUp(email.trim(), password, next);
         if (needsConfirm) setNotice('Account created. Open the confirmation link in your inbox within the hour, and it will bring you back here signed in.');
@@ -192,6 +260,8 @@ export default function AccountPage() {
           </section>
         ) : auth.loading ? (
           <p className="text-muted">Loading…</p>
+        ) : auth.user && auth.recovering ? (
+          <NewPasswordForm onDone={() => setPasswordChanged(true)} />
         ) : auth.user ? (
           <section className="card p-6">
             <p className="label text-accent">
@@ -199,11 +269,19 @@ export default function AccountPage() {
               Your account
             </p>
             <h1 className="mt-1 truncate font-mono text-lg text-fg-bright">{auth.user.email ?? auth.user.id}</h1>
-            {authCallback.kind === 'confirmed' && (
+            {passwordChanged ? (
               <p className="mt-3 text-sm text-success">
                 <Icon g={NF.check} className="mr-1.5" />
-                Email confirmed. You are signed in.
+                Password changed. Use it the next time you sign in.
               </p>
+            ) : (
+              authCallback.kind === 'confirmed' &&
+              authCallback.type !== 'recovery' && (
+                <p className="mt-3 text-sm text-success">
+                  <Icon g={NF.check} className="mr-1.5" />
+                  Email confirmed. You are signed in.
+                </p>
+              )
             )}
             <dl className="mt-5 grid grid-cols-2 gap-3 text-sm">
               <div className="rounded-xl bg-surface-2 p-3">
@@ -273,11 +351,11 @@ export default function AccountPage() {
               </p>
             )}
             <div className="flex gap-1 rounded-xl bg-surface-2 p-1 text-sm">
-              {(['signin', 'signup'] as Tab[]).map((t) => (
+              {(['signin', 'signup'] as const).map((t) => (
                 <button
                   key={t}
                   type="button"
-                  className={`flex-1 rounded-lg px-3 py-1.5 font-medium transition-colors ${tab === t ? 'bg-surface-3 text-fg-bright' : 'text-muted hover:text-fg'}`}
+                  className={`flex-1 rounded-lg px-3 py-1.5 font-medium transition-colors ${tab === t || (tab === 'reset' && t === 'signin') ? 'bg-surface-3 text-fg-bright' : 'text-muted hover:text-fg'}`}
                   onClick={() => {
                     setTab(t);
                     setError(null);
@@ -289,19 +367,41 @@ export default function AccountPage() {
                 </button>
               ))}
             </div>
-            <h1 className="display mt-6 text-2xl text-fg-bright">{tab === 'signin' ? 'Welcome back' : 'Keep your progress'}</h1>
+            <h1 className="display mt-6 text-2xl text-fg-bright">{tab === 'signin' ? 'Welcome back' : tab === 'reset' ? 'Reset your password' : 'Keep your progress'}</h1>
             <p className="mt-1 text-sm leading-6 text-muted">
-              {tab === 'signin' ? 'Sign in to pick up where you left off on any device.' : 'A free account stores your scores and stars so you can continue from any device and appear on the leaderboard.'}
+              {tab === 'signin'
+                ? 'Sign in to pick up where you left off on any device.'
+                : tab === 'reset'
+                  ? 'Enter the email address you signed up with and we will send you a link to choose a new password.'
+                  : 'A free account stores your scores and stars so you can continue from any device and appear on the leaderboard.'}
             </p>
             <form onSubmit={submit} className="mt-5 flex flex-col gap-3">
               <label className="flex flex-col gap-1 text-xs text-muted">
                 Email
                 <input type="email" required autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className="input" />
               </label>
-              <label className="flex flex-col gap-1 text-xs text-muted">
-                Password
-                <input type="password" required minLength={8} autoComplete={tab === 'signin' ? 'current-password' : 'new-password'} value={password} onChange={(e) => setPassword(e.target.value)} className="input" />
-              </label>
+              {tab !== 'reset' && (
+                <label className="flex flex-col gap-1 text-xs text-muted">
+                  <span className="flex items-baseline justify-between">
+                    Password
+                    {tab === 'signin' && (
+                      <button
+                        type="button"
+                        className="text-accent hover:underline"
+                        onClick={() => {
+                          setTab('reset');
+                          setError(null);
+                          setNotice(null);
+                          setOfferResend(false);
+                        }}
+                      >
+                        Forgot your password?
+                      </button>
+                    )}
+                  </span>
+                  <input type="password" required minLength={8} autoComplete={tab === 'signin' ? 'current-password' : 'new-password'} value={password} onChange={(e) => setPassword(e.target.value)} className="input" />
+                </label>
+              )}
               {error && (
                 <div className="text-sm text-danger">
                   <p>
@@ -323,8 +423,21 @@ export default function AccountPage() {
                 </p>
               )}
               <button type="submit" disabled={busy} className="btn btn-primary mt-1 justify-center py-2.5">
-                {busy ? 'Please wait…' : tab === 'signin' ? 'Sign in' : 'Create account'}
+                {busy ? 'Please wait…' : tab === 'signin' ? 'Sign in' : tab === 'reset' ? 'Send the reset link' : 'Create account'}
               </button>
+              {tab === 'reset' && (
+                <button
+                  type="button"
+                  className="text-xs text-accent hover:underline"
+                  onClick={() => {
+                    setTab('signin');
+                    setError(null);
+                    setNotice(null);
+                  }}
+                >
+                  Back to sign in
+                </button>
+              )}
             </form>
             <div className="my-4 flex items-center gap-3 text-xs text-muted">
               <span className="h-px flex-1 bg-border" />

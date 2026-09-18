@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { User } from '@supabase/supabase-js';
 import { rememberNext } from './authCallback';
-import { accountsEnabled, authRedirectTo, supabase } from './supabase';
+import { accountsEnabled, authCallback, authRedirectTo, supabase } from './supabase';
 
 export interface AuthState {
   /** False when no Supabase project is configured: guest mode only. */
@@ -19,6 +19,12 @@ export interface AuthState {
   resendConfirmation(email: string, next?: string | null): Promise<void>;
   signInWithGitHub(next?: string | null): Promise<void>;
   signOut(): Promise<void>;
+  /** Email a link that signs the learner in so they can choose a new password. */
+  requestPasswordReset(email: string): Promise<void>;
+  /** True after arriving from a reset link, until a new password has been saved. */
+  recovering: boolean;
+  /** Set a new password for the signed-in learner. */
+  updatePassword(password: string): Promise<void>;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -30,6 +36,9 @@ function fail(message: string): never {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(accountsEnabled);
+  // The reset link's fragment says type=recovery. supabase-js also announces it with a
+  // PASSWORD_RECOVERY event, but that can fire before this component subscribes, so read both.
+  const [recovering, setRecovering] = useState(authCallback.kind === 'confirmed' && authCallback.type === 'recovery');
 
   useEffect(() => {
     if (!supabase) return;
@@ -39,7 +48,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(data.session?.user ?? null);
       setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setRecovering(true);
+      if (event === 'SIGNED_OUT') setRecovering(false);
       setUser(session?.user ?? null);
       setLoading(false);
     });
@@ -53,6 +64,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     enabled: accountsEnabled,
     loading,
     user,
+    recovering,
     async signIn(email, password) {
       if (!supabase) fail('Accounts are not enabled on this site.');
       const { error } = await supabase.auth.signInWithPassword({ email, password });
@@ -76,6 +88,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       rememberNext(next);
       const { error } = await supabase.auth.signInWithOAuth({ provider: 'github', options: { redirectTo: authRedirectTo() } });
       if (error) fail(error.message);
+    },
+    async requestPasswordReset(email) {
+      if (!supabase) fail('Accounts are not enabled on this site.');
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: authRedirectTo() });
+      if (error) fail(error.message);
+    },
+    async updatePassword(password) {
+      if (!supabase) fail('Accounts are not enabled on this site.');
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) fail(error.message);
+      setRecovering(false);
     },
     async signOut() {
       if (!supabase) return;

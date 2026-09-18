@@ -46,9 +46,9 @@ export function readAuthCallback(url: string): AuthCallback {
 export function callbackMessage(c: Extract<AuthCallback, { kind: 'error' }>): string {
   switch (c.code) {
     case 'otp_expired':
-      return 'That confirmation link has expired. Links are only good for a short while, so ask for a new one below and open the newest email.';
+      return 'That email link has expired. Links are only good for a short while, so ask for a new one below and open the newest email. If you were resetting your password, use "Forgot your password?" instead.';
     case 'access_denied':
-      return 'That confirmation link is no longer valid. It may have expired or already been used. Ask for a new one below, or sign in if the account is already confirmed.';
+      return 'That email link is no longer valid. It may have expired or already been used. Ask for a new one below, or sign in if the account is already confirmed. If you were resetting your password, use "Forgot your password?" instead.';
     case 'signup_disabled':
       return 'This site is not accepting new accounts at the moment.';
     case 'provider_email_needs_verification':

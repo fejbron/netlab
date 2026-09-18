@@ -44,6 +44,11 @@ describe('reading the URL Supabase sends learners back to', () => {
     expect(readAuthCallback('https://netlab.example/account?code=pkce-code')).toEqual({ kind: 'confirmed', type: null });
   });
 
+  it('tells a password reset link apart from a sign-up confirmation', () => {
+    expect(readAuthCallback('https://netlab.example/account#access_token=abc&refresh_token=def&type=recovery')).toEqual({ kind: 'confirmed', type: 'recovery' });
+    expect(readAuthCallback('https://netlab.example/account#access_token=abc&type=signup')).toEqual({ kind: 'confirmed', type: 'signup' });
+  });
+
   it('reads an expired link, which supabase-js leaves in the fragment', () => {
     const c = readAuthCallback('https://netlab.example/account#error=access_denied&error_code=otp_expired&error_description=Email+link+is+invalid+or+has+expired');
     expect(c).toEqual({ kind: 'error', code: 'otp_expired', description: 'Email link is invalid or has expired' });
