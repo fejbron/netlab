@@ -414,7 +414,97 @@ export const ansiblePath: LearningPath = {
   },
 };
 
-export const paths: LearningPath[] = [ccnaPath, linuxPath, sqlPath, terraformPath, ansiblePath];
+export const GIT_DOMAINS: ExamDomain[] = [
+  { id: 'RC', title: 'Repositories and commits', weight: 22 },
+  { id: 'BM', title: 'Branching and merging', weight: 19 },
+  { id: 'HR', title: 'History and recovery', weight: 18 },
+  { id: 'CR', title: 'Collaboration and remotes', weight: 19 },
+  { id: 'RW', title: 'Rebasing and rewriting', weight: 15 },
+  { id: 'WF', title: 'Workflow and review', weight: 7 },
+];
+
+/**
+ * NetLab's own syllabus. Where a skill matches a GitHub Foundations objective, the
+ * objective is named in the text, so someone preparing for that exam can see which
+ * of its domains these labs cover.
+ */
+export const GIT_TOPICS: Record<string, string> = {
+  'RC.1': 'Create a repository and record the first commit (Foundations 1.1, 1.2)',
+  'RC.2': 'The three states: working tree, staging area and HEAD (Foundations 1.2)',
+  'RC.3': 'Read status, diffs and the log (Foundations 1.2)',
+  'RC.4': 'Keep files out of history with .gitignore (Foundations 2.1)',
+  'RC.5': 'Configure identity and repository settings (Foundations 1.1)',
+  'RC.6': 'Look inside the object store: blobs, trees and commits',
+  'BM.1': 'Create, list and switch branches (Foundations 1.3)',
+  'BM.2': 'Merge a branch, fast-forward and true merge (Foundations 1.3)',
+  'BM.3': 'Resolve a merge conflict (Foundations 3.3)',
+  'BM.4': 'Delete, rename and compare branches',
+  'BM.5': 'Tag a release (Foundations 2.3)',
+  'HR.1': 'Move HEAD and branches with reset',
+  'HR.2': 'Undo a commit safely with revert',
+  'HR.3': 'Recover lost work with the reflog',
+  'HR.4': 'Set work aside with the stash',
+  'HR.5': 'Find when and why something changed, with log and blame',
+  'CR.1': 'Add a remote and publish a branch (Foundations 1.3, 2.1)',
+  'CR.2': 'Clone a repository (Foundations 1.3)',
+  'CR.3': 'Fetch, pull and track an upstream branch (Foundations 1.3)',
+  'CR.4': 'Resolve a rejected push without losing anyone’s work (Foundations 3.3)',
+  'CR.5': 'Work on one branch alongside somebody else (Foundations 3.1)',
+  'RW.1': 'Rebase a branch onto another',
+  'RW.2': 'Amend and squash commits',
+  'RW.3': 'Cherry-pick a single commit',
+  'RW.4': 'Know why rewriting shared history hurts, and when it is safe',
+  'WF.1': 'Keep a history that can be read and reviewed (Foundations 3.2)',
+  'WF.2': 'Run a feature-branch workflow from start to finish (Foundations 3.1, 3.2)',
+};
+
+export const gitPath: LearningPath = {
+  id: 'git',
+  title: 'Git Version Control',
+  shortTitle: 'Git',
+  scopeLabel: 'Version control path',
+  levelLabel: 'Foundation',
+  eyebrow: 'Git · in your browser',
+  summary:
+    'Learn Git by using it: commit, branch and merge in a real repository whose objects and refs you can read with your own eyes, resolve conflicts, recover work you thought you had lost, and push and pull with a colleague on a server that pushes back when you would overwrite their commits.',
+  outcomes: [
+    'Make commits with intent: stage deliberately, write messages worth reading, and keep junk out with .gitignore.',
+    'Read what git is telling you in status, diff and log, and say what the working tree, the staging area and HEAD each hold.',
+    'Branch and merge without fear, including resolving a conflict by hand and knowing what the markers mean.',
+    'Undo almost anything: reset, revert, stash, and the reflog that finds commits nothing points at any more.',
+    'Publish work to a shared repository, track an upstream branch, and fix a rejected push without losing a colleague’s commits.',
+    'Rebase, amend, squash and cherry-pick, and judge when rewriting history is fine and when it is rude.',
+    'Look inside .git and explain a commit as an object graph, which is what makes the rest of git stop being magic.',
+  ],
+  audience: 'Anyone who writes code, configuration or documents and wants version control to stop being a set of memorised incantations. Useful preparation for the git half of GitHub Foundations.',
+  prerequisites: 'Comfort at a Linux shell: moving between directories, and writing a file with echo or a heredoc (the Linux path covers it). No account with any host is needed.',
+  skillTags: ['Commits', 'Branching', 'Merge conflicts', 'Rebase', 'Reflog', 'Remotes', 'Push and pull', 'The object store'],
+  blueprint: {
+    version: 'NetLab Git syllabus',
+    reviewedAt: '2026-09-28',
+    facts: [
+      { label: 'Syllabus', value: "NetLab's own" },
+      { label: 'Areas', value: '6' },
+      { label: 'Git version', value: '2.43' },
+      { label: 'Also useful for', value: 'GitHub Foundations' },
+    ],
+    sources: [
+      { label: 'Pro Git (Chacon & Straub)', url: 'https://git-scm.com/book/en/v2' },
+      { label: 'Git reference manual', url: 'https://git-scm.com/docs' },
+      { label: 'GitHub Foundations certification', url: 'https://github.com/education/certification' },
+    ],
+    intro:
+      'Git has no single vendor exam, so this path follows a syllabus of NetLab’s own: six areas, each a list of skills. Every module is tagged with the skills it practises, so the bars show how far you are through each area. Where a skill also appears in the GitHub Foundations certification, the objective is named beside it.',
+    weightingNote:
+      'The percentages are each area’s share of the skills listed, which is NetLab’s own weighting rather than anybody’s exam. If you are preparing for GitHub Foundations, note what is deliberately absent: NetLab simulates git itself and a plain SSH server to push to, not the GitHub website. Pull requests, code review, Issues, Projects, Actions, Copilot, licensing and account administration — most of Foundations domains 3, 4 and 5 — are not covered here, and no bar on this page should be read as covering them.',
+    trademarkNotice:
+      'NetLab is an independent, open-source simulator and is not affiliated with, authorized, sponsored, or endorsed by GitHub, Microsoft or the Git project. Git is a trademark of Software Freedom Conservancy. GitHub is a trademark of GitHub, Inc. The labs are original and are not official training or a guarantee of exam readiness.',
+    domains: GIT_DOMAINS,
+    topics: GIT_TOPICS,
+  },
+};
+
+export const paths: LearningPath[] = [ccnaPath, linuxPath, sqlPath, terraformPath, ansiblePath, gitPath];
 
 export function getPath(id: string): LearningPath | undefined {
   return paths.find((p) => p.id === id);

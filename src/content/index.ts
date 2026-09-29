@@ -41,12 +41,19 @@ import { anSystemLabs } from './labs/an-system';
 import { anRolesLabs } from './labs/an-roles';
 import { anNetworkLabs } from './labs/an-network';
 import { anExamLabs } from './labs/an-exams';
+import { gitBasicsLabs } from './labs/git-basics';
+import { gitBranchingLabs } from './labs/git-branching';
+import { gitHistoryLabs } from './labs/git-history';
+import { gitRemotesLabs } from './labs/git-remotes';
+import { gitRewriteLabs } from './labs/git-rewrite';
+import { gitWorkflowLabs } from './labs/git-workflow';
+import { gitExamLabs } from './labs/git-exams';
 import { paths } from './paths';
 
 export type { Lab, Module, Difficulty } from './types';
 export { BLUEPRINT, EXAM_DOMAINS, EXAM_TOPICS, PATH_OVERVIEW, domainCoverage, topicDomain, byTopicCode } from './blueprint';
 export type { ExamDomain, DomainCoverage } from './blueprint';
-export { paths, getPath, pathUrl, ccnaPath, linuxPath, sqlPath, terraformPath, ansiblePath, LFCS_DOMAINS, LFCS_TOPICS, SQL_DOMAINS, SQL_TOPICS, TF_DOMAINS, TF_TOPICS, AN_DOMAINS, AN_TOPICS } from './paths';
+export { paths, getPath, pathUrl, ccnaPath, linuxPath, sqlPath, terraformPath, ansiblePath, gitPath, LFCS_DOMAINS, LFCS_TOPICS, SQL_DOMAINS, SQL_TOPICS, TF_DOMAINS, TF_TOPICS, AN_DOMAINS, AN_TOPICS, GIT_DOMAINS, GIT_TOPICS } from './paths';
 export type { LearningPath, PathBlueprint } from './paths';
 
 export const modules: Module[] = [
@@ -124,6 +131,15 @@ export const modules: Module[] = [
   { id: 'an-roles', pathId: 'ansible', order: 5, title: 'Roles and Collections', description: 'Refactor a playbook into a role with defaults, templates and handlers, reuse it with different values, and install roles and collections from Galaxy with a requirements file.', examTopics: ['1.h', '2.a', '2.b', '2.c', '2.d'] },
   { id: 'an-network', pathId: 'ansible', order: 6, title: 'Network Devices', description: 'Beyond RHCE: reach Cisco IOS devices with network_cli and the cisco.ios collection, configure them idempotently, and drive them all from one template.', examTopics: ['1.a', '1.b', '2.c', '8.a'] },
   { id: 'an-exams', pathId: 'ansible', order: 7, title: 'Ansible Exams', description: 'Two capstones: automate a three-server environment from a written specification, and take over a playbook that works once and make it something you would schedule.', examTopics: ['1.a', '1.h', '2.a', '6.e', '7.a', '7.b', '7.h', '7.j', '8.a', '8.b'] },
+
+  // --- Git
+  { id: 'git-basics', pathId: 'git', order: 1, title: 'Commits and the Object Store', description: 'Make a repository, move changes through the staging area deliberately, read the history, keep junk out of it, and open .git to see what a commit really is.', examTopics: ['RC.1', 'RC.2', 'RC.3', 'RC.4', 'RC.5', 'RC.6'] },
+  { id: 'git-branching', pathId: 'git', order: 2, title: 'Branching and Merging', description: 'Branch for every piece of work, merge it back both ways, resolve a conflict by hand, and keep the branch list and the tags tidy.', examTopics: ['BM.1', 'BM.2', 'BM.3', 'BM.4', 'BM.5'] },
+  { id: 'git-history', pathId: 'git', order: 3, title: 'Undo and Recover', description: 'The three resets and what each keeps, revert for history other people have, the reflog that finds lost commits, and the stash for work you are not ready to commit.', examTopics: ['HR.1', 'HR.2', 'HR.3', 'HR.4', 'HR.5'] },
+  { id: 'git-remotes', pathId: 'git', order: 4, title: 'Working With Other People', description: 'Publish to a server, clone it elsewhere, read remote-tracking branches, recover from a rejected push, and resolve a conflict that arrives through a pull.', examTopics: ['CR.1', 'CR.2', 'CR.3', 'CR.4', 'CR.5'] },
+  { id: 'git-rewrite', pathId: 'git', order: 5, title: 'Rewriting History', description: 'Rebase a branch onto a moved main, amend and squash your own commits, cherry-pick one commit from an unfinished branch, and watch what rewriting published work costs.', examTopics: ['RW.1', 'RW.2', 'RW.3', 'RW.4'] },
+  { id: 'git-workflow', pathId: 'git', order: 6, title: 'Workflow and Review', description: 'Shape a messy branch into a history somebody can review, then run one change through the whole feature-branch loop on a shared repository.', examTopics: ['WF.1', 'WF.2'] },
+  { id: 'git-exams', pathId: 'git', order: 7, title: 'Git Exams', description: 'Two capstones: ship a feature onto a repository a colleague is also pushing to, and rescue a repository with a leaked secret, a deleted branch and a bad public commit.', examTopics: ['RC.4', 'BM.2', 'HR.2', 'HR.3', 'HR.4', 'CR.1', 'CR.3', 'RW.1', 'WF.2'] },
 ];
 
 const pathOrder = (pathId: string) => paths.findIndex((p) => p.id === pathId);
@@ -170,6 +186,13 @@ export const labs: Lab[] = [
   ...anRolesLabs,
   ...anNetworkLabs,
   ...anExamLabs,
+  ...gitBasicsLabs,
+  ...gitBranchingLabs,
+  ...gitHistoryLabs,
+  ...gitRemotesLabs,
+  ...gitRewriteLabs,
+  ...gitWorkflowLabs,
+  ...gitExamLabs,
 ].sort((a, b) => {
   const ma = modules.find((m) => m.id === a.moduleId);
   const mb = modules.find((m) => m.id === b.moduleId);

@@ -39,6 +39,8 @@ import { fail, ok, type CmdCtx, type CmdResult, type Command } from './shell';
 import { formatResult, runSqlLine } from '../sql';
 import { runTerraform } from '../terraform/cli';
 import { runAnsible } from '../ansible/cli';
+import { runGit } from '../git/cli';
+import { tarCommand } from './tarcmd';
 import { runSshCommand } from './ssh';
 import { netcloudCli } from '../terraform/cloud';
 import { loadNginx, makeCertificate, makePrivateKey, opensslDate, parseCertificate, runtime, servicePorts, testNginx } from './web';
@@ -625,7 +627,8 @@ export const COMMANDS: Record<string, Command> = {
           out.push(prefix + (p.flags.has('o') ? (h.l.match(re)?.[0] ?? '') : h.l));
         }
       }
-      return { out, err: p.flags.has('s') ? [] : errors, code: errors.length && !any ? 2 : any ? 0 : 1 };
+      // -q prints nothing: the exit status is the whole answer, which is what scripts want.
+      return { out: p.flags.has('q') ? [] : out, err: p.flags.has('s') ? [] : errors, code: errors.length && !any ? 2 : any ? 0 : 1 };
     },
   },
   egrep: { help: 'grep -E', run: (ctx) => COMMANDS.grep.run({ ...ctx, args: ['-E', ...ctx.args] }) },
@@ -1925,6 +1928,28 @@ export const COMMANDS: Record<string, Command> = {
       const lx = ctx.state;
       if (!lx.cloud) return fail(['bash: netcloud: command not found'], 127);
       return netcloudCli(lx.cloud, ctx.args, lx.env, lx.user);
+    },
+  },
+  tar: {
+    help: "create, list and extract tar archives (-c, -t, -x with -f; no compression)",
+    run: (ctx) => tarCommand(ctx.state, ctx.args, (p) => ctx.sh.path(p)),
+  },
+  git: {
+    help: "the stupid content tracker: init, add, commit, branch, merge, rebase, remote, push and the rest",
+    run: (ctx) => {
+      const lx = ctx.state;
+      if (!lx.packages.includes('git')) return fail(['bash: git: command not found'], 127);
+      const run = (text: string, cwd: string) => {
+        const saved = lx.cwd;
+        lx.cwd = cwd;
+        try {
+          return ctx.sh.runSource(text, []);
+        } finally {
+          lx.cwd = saved;
+        }
+      };
+      const r = runGit({ lx, network: ctx.network, node: ctx.hostId, cwd: lx.cwd, env: { ...lx.env }, run }, ctx.args);
+      return { out: r.out, err: r.err, code: r.code };
     },
   },
   ssh: {

@@ -57,6 +57,14 @@ const SCENES: TerminalScene[] = [
     ],
   },
   {
+    label: 'Git',
+    prompt: 'student@dev1:~/project$',
+    steps: [
+      { cmd: 'git push', out: ['To student@git1:/srv/git/acme.git', ' ! [rejected]        main -> main (fetch first)', "error: failed to push some refs to 'student@git1:/srv/git/acme.git'", 'hint: Updates were rejected because the remote contains work that you do', "hint: not have locally. Use 'git pull' before pushing again."] },
+      { cmd: 'git cat-file -p HEAD', out: ['tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904', 'parent 8f2a1c9e5d3b7a6f4e2d1c0b9a8f7e6d5c4b3a29', 'author Student <student@netlab.lab> 1790000160 +0000', '', 'Add a search function'] },
+    ],
+  },
+  {
     label: 'Ansible',
     prompt: 'student@ops1:~/ansible$',
     steps: [
@@ -171,9 +179,9 @@ function Topology() {
 }
 
 const FEATURES = [
-  { glyph: NF.terminal, title: 'Real engines, not screenshots', body: 'A command resolver with prefix abbreviation and context help, a packet-forwarding simulation, a Bash subset over a permissioned filesystem, a SQL parser and planner written from scratch, a Terraform plan and apply engine with its own HCL parser, and an Ansible runner with its own YAML and Jinja2 implementations.' },
-  { glyph: NF.warning, title: 'Errors that teach', body: "Mistype a command and you get the caret and the marker. Break an nginx file and nginx -t names the file and the line. Break a constraint and the database names the key that already exists. Change the wrong argument and terraform plan marks the line that forces a replacement. Indent a playbook wrongly and the YAML error names the line and points at the column." },
-  { glyph: NF.check, title: 'Graded as you type', body: 'Objectives check the state of the device, the filesystem, the database or the cloud, not the text you typed, so any route to the right answer counts. An Ansible playbook is graded by running it again: if the second run changes anything, it does not pass.' },
+  { glyph: NF.terminal, title: 'Real engines, not screenshots', body: 'A command resolver with prefix abbreviation and context help, a packet-forwarding simulation, a Bash subset over a permissioned filesystem, a SQL parser and planner written from scratch, a Terraform plan and apply engine with its own HCL parser, an Ansible runner with its own YAML and Jinja2 implementations, and a git implementation with a real SHA-1 object store.' },
+  { glyph: NF.warning, title: 'Errors that teach', body: "Mistype a command and you get the caret and the marker. Break an nginx file and nginx -t names the file and the line. Break a constraint and the database names the key that already exists. Change the wrong argument and terraform plan marks the line that forces a replacement. Indent a playbook wrongly and the YAML error names the line and points at the column. Push over somebody else's commit and git refuses, with the hint it really prints." },
+  { glyph: NF.check, title: 'Graded as you type', body: 'Objectives check the state of the device, the filesystem, the database or the cloud, not the text you typed, so any route to the right answer counts. An Ansible playbook is graded by running it again: if the second run changes anything, it does not pass. A git lab is graded from the objects and refs in .git, so any route to the right history counts.' },
   { glyph: NF.cloud, title: 'Nothing to install', body: 'It all runs in the browser. No virtual machines, no images to download, no licences. Open a tab and start.' },
 ];
 

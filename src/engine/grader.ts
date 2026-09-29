@@ -8,6 +8,7 @@ import { display as sqlDisplay, queryFor, type SqlState, type SqlType, type SqlV
 import { enabledModules, enabledSites, testApache } from './linux/apache';
 import { describeTf, evaluateTf, TF_CHECKS, type TfCheck } from './terraform/grade';
 import { describeAn, evaluateAn, AN_CHECKS, type AnCheck } from './ansible/grade';
+import { describeGit, evaluateGit, GIT_CHECKS, type GitCheck } from './git/grade';
 import type { AclAddr, AclEntry, AclProtocol, ApiRequest, CliErrorKind, DeviceState, LineState, Mode, PortMode, SnmpMode, SyslogLevel } from './types';
 
 interface Base {
@@ -159,6 +160,8 @@ export type Check = Base &
     | TfCheck
     // --- Ansible (device = the control node); see ansible/grade.ts
     | AnCheck
+    // --- Git (device = the workstation holding the repository); see git/grade.ts
+    | GitCheck
   );
 
 const SQL_CHECKS = new Set(['sql-table', 'sql-query', 'sql-answer', 'sql-ran', 'sql-index', 'sql-view', 'sql-result']);
@@ -200,6 +203,7 @@ function describe(check: Check): string {
   const on = check.device ? ` on ${check.device}` : '';
   if (TF_CHECKS.has(check.type)) return describeTf(check as TfCheck, '');
   if (AN_CHECKS.has(check.type)) return describeAn(check as AnCheck, '');
+  if (GIT_CHECKS.has(check.type)) return describeGit(check as GitCheck, '');
   switch (check.type) {
     case 'command':
       return `Run ${readable(check.pattern)}${on}`;
@@ -379,7 +383,7 @@ function describe(check: Check): string {
     case 'apache-site':
       return `Apache site ${check.name} is ${check.enabled === false ? 'disabled' : 'enabled'}${on}`;
     default:
-      return AN_CHECKS.has(check.type) ? describeAn(check as AnCheck, on) : describeTf(check as TfCheck, on);
+      return AN_CHECKS.has(check.type) ? describeAn(check as AnCheck, on) : GIT_CHECKS.has(check.type) ? describeGit(check as GitCheck, on) : describeTf(check as TfCheck, on);
   }
 }
 
@@ -634,6 +638,11 @@ function evaluateCheckInner(check: Check, net: NetworkState): boolean | undefine
   if (TF_CHECKS.has(check.type)) {
     const h = net.hosts[check.device ?? ''] ?? Object.values(net.hosts).find((x) => x.linux?.cloud);
     return h?.linux ? evaluateTf(check as TfCheck, h.linux) : false;
+  }
+  if (GIT_CHECKS.has(check.type)) {
+    const c = check as GitCheck;
+    const h = net.hosts[c.host ?? check.device ?? ''] ?? Object.values(net.hosts).find((x) => x.linux?.packages.includes('git'));
+    return h?.linux ? evaluateGit(c, h.linux, net) : false;
   }
   if (AN_CHECKS.has(check.type)) {
     const h = net.hosts[check.device ?? ''] ?? Object.values(net.hosts).find((x) => x.linux?.packages.includes('ansible'));

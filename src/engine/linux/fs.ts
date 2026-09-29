@@ -137,6 +137,8 @@ export interface LinuxState {
   cloud?: CloudAccount;
   /** Every ansible-playbook and ad-hoc run on this host, for grading. */
   ansibleRuns?: AnsibleRun[];
+  /** Every git command that ran on this host, for grading. */
+  gitRuns?: Array<{ command: string; args: string[]; code: number; dir: string }>;
   /** Every terraform command run on this host, for grading. */
   terraformRuns?: Array<{ command: string; args: string[]; code: number; dir: string; workspace: string; add?: number; change?: number; destroy?: number; imported?: number; noChanges?: boolean; remote?: boolean }>;
 }

@@ -48,6 +48,15 @@ function welcome(title: string, network: NetworkState, nodeId: string): TermLine
         { kind: 'output', text: '' },
       ];
     }
+    if (host.linux.packages.includes('git')) {
+      return [
+        { kind: 'output', text: `Welcome to NetLab: ${title}` },
+        { kind: 'output', text: `Ubuntu 24.04.1 LTS on ${host.linux.hostname} (simulated). git 2.43 is installed; you are in ${host.linux.cwd.replace(/^\/home\/[^/]+/, '~')}.` },
+        { kind: 'output', text: "No editor here: write files with echo > file or cat > file << 'EOF', or paste several lines at once." },
+        { kind: 'output', text: 'Everything git knows is under .git, and you are welcome to read it.' },
+        { kind: 'output', text: '' },
+      ];
+    }
     return [
       { kind: 'output', text: `Welcome to NetLab: ${title}` },
       { kind: 'output', text: `Ubuntu 24.04.1 LTS on ${host.linux.hostname} (simulated). Logged in as ${host.linux.user}.` },

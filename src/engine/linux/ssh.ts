@@ -10,6 +10,7 @@ import { ping } from '../network';
 import type { NetworkState } from '../network';
 import { getNode, makeDir, readFile, writeFile, type LinuxState } from './fs';
 import { runLine } from './shell';
+import { findHost } from './hosts';
 
 export interface SshPending {
   kind: 'ssh';
@@ -53,14 +54,7 @@ function homeOfUser(lx: LinuxState, user: string): string {
   return lx.users.find((u) => u.name === user)?.home ?? (user === 'root' ? '/root' : `/home/${user}`);
 }
 
-/** Find the host in the network that answers to this name or address. */
-export function findHost(network: NetworkState, target: string): { node: string; lx: LinuxState } | null {
-  for (const host of Object.values(network.hosts)) {
-    if (!host.linux) continue;
-    if (host.id === target || host.name === target || host.ip === target || host.linux.hostname === target) return { node: host.id, lx: host.linux };
-  }
-  return null;
-}
+export { findHost } from './hosts';
 
 export function runSshCommand(lx: LinuxState, network: NetworkState, node: string, command: string, args: string[], answers: string[]): SshResult {
   const out: string[] = [];
