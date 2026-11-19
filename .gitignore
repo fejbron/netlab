@@ -6,3 +6,7 @@ coverage/
 .DS_Store
 Thumbs.db
 supabase/.temp/
+
+.vercel
+.env.local
+.env*.local
