@@ -67,6 +67,29 @@ export interface NetworkState {
   devices: Record<string, DeviceState>;
   hosts: Record<string, HostState>;
   links: Link[];
+  /** Present on a lesson lab (a stepped, diagram-led explanation with a knowledge check) instead of devices. */
+  lesson?: LessonProgress;
+}
+
+/** How far a learner is through a lesson lab: the steps opened, and the knowledge-check answers. */
+export interface LessonProgress {
+  /** Indices of the steps the learner has opened. The first step is open from the start. */
+  seen: number[];
+  answers: Record<string, LessonAnswer>;
+}
+
+export interface LessonAnswer {
+  /** Option chosen most recently. */
+  chosen: number;
+  correct: boolean;
+  /** Wrong options tried before the right one. */
+  wrong: number;
+  /** The answer was shown rather than found. */
+  revealed: boolean;
+}
+
+export function emptyLesson(): LessonProgress {
+  return { seen: [0], answers: {} };
 }
 
 export function isNetworkState(x: unknown): x is NetworkState {

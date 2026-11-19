@@ -48,12 +48,21 @@ import { gitRemotesLabs } from './labs/git-remotes';
 import { gitRewriteLabs } from './labs/git-rewrite';
 import { gitWorkflowLabs } from './labs/git-workflow';
 import { gitExamLabs } from './labs/git-exams';
+import { sdFoundationsLabs } from './labs/sd-foundations';
+import { sdScalingLabs } from './labs/sd-scaling';
+import { sdDataLabs } from './labs/sd-data';
+import { sdCommunicationLabs } from './labs/sd-communication';
+import { sdReliabilityLabs } from './labs/sd-reliability';
+import { sdArchitectureLabs } from './labs/sd-architecture';
+import { sdSecurityLabs } from './labs/sd-security';
+import { sdShippingLabs } from './labs/sd-shipping';
+import { sdSystemsLabs } from './labs/sd-systems';
 import { paths } from './paths';
 
 export type { Lab, Module, Difficulty } from './types';
 export { BLUEPRINT, EXAM_DOMAINS, EXAM_TOPICS, PATH_OVERVIEW, domainCoverage, topicDomain, byTopicCode } from './blueprint';
 export type { ExamDomain, DomainCoverage } from './blueprint';
-export { paths, getPath, pathUrl, ccnaPath, linuxPath, sqlPath, terraformPath, ansiblePath, gitPath, LFCS_DOMAINS, LFCS_TOPICS, SQL_DOMAINS, SQL_TOPICS, TF_DOMAINS, TF_TOPICS, AN_DOMAINS, AN_TOPICS, GIT_DOMAINS, GIT_TOPICS } from './paths';
+export { paths, getPath, pathUrl, ccnaPath, linuxPath, sqlPath, terraformPath, ansiblePath, gitPath, sysdesignPath, LFCS_DOMAINS, LFCS_TOPICS, SQL_DOMAINS, SQL_TOPICS, TF_DOMAINS, TF_TOPICS, AN_DOMAINS, AN_TOPICS, GIT_DOMAINS, GIT_TOPICS, SD_DOMAINS, SD_TOPICS } from './paths';
 export type { LearningPath, PathBlueprint } from './paths';
 
 export const modules: Module[] = [
@@ -140,6 +149,16 @@ export const modules: Module[] = [
   { id: 'git-rewrite', pathId: 'git', order: 5, title: 'Rewriting History', description: 'Rebase a branch onto a moved main, amend and squash your own commits, cherry-pick one commit from an unfinished branch, and watch what rewriting published work costs.', examTopics: ['RW.1', 'RW.2', 'RW.3', 'RW.4'] },
   { id: 'git-workflow', pathId: 'git', order: 6, title: 'Workflow and Review', description: 'Shape a messy branch into a history somebody can review, then run one change through the whole feature-branch loop on a shared repository.', examTopics: ['WF.1', 'WF.2'] },
   { id: 'git-exams', pathId: 'git', order: 7, title: 'Git Exams', description: 'Two capstones: ship a feature onto a repository a colleague is also pushing to, and rescue a repository with a leaked secret, a deleted branch and a bad public commit.', examTopics: ['RC.4', 'BM.2', 'HR.2', 'HR.3', 'HR.4', 'CR.1', 'CR.3', 'RW.1', 'WF.2'] },
+  // --- System Design
+  { id: 'sd-foundations', pathId: 'sysdesign', order: 1, title: 'Foundations', description: 'Follow a request hop by hop, tell latency from throughput and read percentiles, and size a feature on a napkin before drawing any boxes.', examTopics: ['FN.1', 'FN.2', 'FN.3'] },
+  { id: 'sd-scaling', pathId: 'sysdesign', order: 2, title: 'Scaling', description: 'Scale up, then out: a load balancer in front, stateless servers behind it, a cache for the reads that repeat, and a CDN for the bytes that never change.', examTopics: ['SC.1', 'SC.2', 'SC.3', 'SC.4', 'SC.5'] },
+  { id: 'sd-data', pathId: 'sysdesign', order: 3, title: 'Data and Storage', description: 'Pick a store from the access pattern, index it, understand the engine under it, replicate it, shard it, hash it, give rows unique IDs, and face CAP, consensus, transactions and media.', examTopics: ['DS.1', 'DS.2', 'DS.3', 'DS.4', 'DS.5', 'DS.6', 'DS.7', 'DS.8', 'DS.9', 'DS.10', 'DS.11'] },
+  { id: 'sd-communication', pathId: 'sysdesign', order: 4, title: 'Communication', description: 'Shape an API, decouple services with a queue, fan events out with pub/sub, and push updates to a client that is waiting.', examTopics: ['CM.1', 'CM.2', 'CM.3', 'CM.4'] },
+  { id: 'sd-reliability', pathId: 'sysdesign', order: 5, title: 'Reliability', description: 'Remove single points of failure, limit the rate a caller can hurt you, set timeouts and retry with backoff, and see what the system is doing before users tell you.', examTopics: ['RL.1', 'RL.2', 'RL.3', 'RL.4'] },
+  { id: 'sd-architecture', pathId: 'sysdesign', order: 6, title: 'Architecture', description: 'When a monolith should split and when it should not, how services find each other, how a transaction spans several of them, and batch versus stream processing.', examTopics: ['AR.1', 'AR.2', 'AR.3', 'AR.4'] },
+  { id: 'sd-security', pathId: 'sysdesign', order: 7, title: 'Security', description: 'Prove who a caller is, decide what they may do, and keep data and secrets unreadable to everyone else.', examTopics: ['SE.1', 'SE.2', 'SE.3'] },
+  { id: 'sd-shipping', pathId: 'sysdesign', order: 8, title: 'Shipping', description: 'Test a system made of many parts, then deploy it without a maintenance window: pipelines, blue-green, canaries and rollbacks.', examTopics: ['SH.1', 'SH.2'] },
+  { id: 'sd-systems', pathId: 'sysdesign', order: 9, title: 'Whole Systems', description: 'Run a design from requirements to a diagram you can defend, then do it three times: a URL shortener, a news feed and a chat system.', examTopics: ['WS.1', 'WS.2', 'WS.3', 'WS.4'] },
 ];
 
 const pathOrder = (pathId: string) => paths.findIndex((p) => p.id === pathId);
@@ -193,6 +212,15 @@ export const labs: Lab[] = [
   ...gitRewriteLabs,
   ...gitWorkflowLabs,
   ...gitExamLabs,
+  ...sdFoundationsLabs,
+  ...sdScalingLabs,
+  ...sdDataLabs,
+  ...sdCommunicationLabs,
+  ...sdReliabilityLabs,
+  ...sdArchitectureLabs,
+  ...sdSecurityLabs,
+  ...sdShippingLabs,
+  ...sdSystemsLabs,
 ].sort((a, b) => {
   const ma = modules.find((m) => m.id === a.moduleId);
   const mb = modules.find((m) => m.id === b.moduleId);

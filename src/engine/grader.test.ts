@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { isLabUnlocked, labNetwork, labs } from '../content';
+import { completeLesson } from '../content/lesson';
 import { evaluateCheck, grade } from './grader';
 import { applyPythonResult, executeHost, executeOn, type NetworkState, type PendingPython, type PythonResult } from './index';
 
@@ -2273,13 +2274,14 @@ describe('reference solutions pass', () => {
   };
 
   it('covers every lab', () => {
-    expect(Object.keys(solutions).sort()).toEqual(labs.map((l) => l.id).sort());
+    // Lesson labs have no command solution: they are completed by opening every step and answering the check.
+    expect(Object.keys(solutions).sort()).toEqual(labs.filter((l) => !l.lesson).map((l) => l.id).sort());
   });
 
   for (const lab of labs) {
     it(lab.id, () => {
       pythonFake = fakes[lab.id] ?? (() => ({}));
-      const net = run(labNetwork(lab), ...(solutions[lab.id] ?? []));
+      const net = lab.lesson ? completeLesson(labNetwork(lab), lab.lesson) : run(labNetwork(lab), ...(solutions[lab.id] ?? []));
       const result = grade(lab.objectives, net);
       const failing = result.objectives.filter((o) => !o.passed).map((o) => `${o.label}: ${o.checks.filter((c) => !c.passed).map((c) => c.label).join(', ')}`);
       expect(failing).toEqual([]);

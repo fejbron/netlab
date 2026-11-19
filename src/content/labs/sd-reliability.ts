@@ -1,0 +1,355 @@
+import type { Lab } from '../types';
+import { cache, db, lb, lesson, link, note, q, region, replica, scene, server, service, users } from '../lesson';
+
+/* Reliability: redundancy and failover, rate limiting, timeouts and retries, observability. */
+
+const MODULE = 'sd-reliability';
+
+export const sdReliabilityLabs: Lab[] = [
+  lesson({
+    id: 'sd-24-redundancy-and-failover',
+    moduleId: MODULE,
+    order: 1,
+    title: 'Redundancy and Failover',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 12,
+    description: 'Find the single points of failure, give each a spare, and decide whether the spare waits or works: active-passive, active-active, and the availability arithmetic.',
+    scenario: 'Gigs promises 99.9% uptime: under nine hours of downtime a year. Last year a single failed disk cost eleven. The exercise is to walk the architecture and ask, of every box, "what happens when this one dies?"',
+    concepts: ['Single points of failure', 'Active-passive', 'Active-active', 'Availability maths', 'Multi-region'],
+    metrics: [
+      { key: 'spofs', label: 'Single points of failure', good: 'down' },
+      { key: 'avail', label: 'Availability', unit: '%', good: 'up' },
+      { key: 'downtime', label: 'Downtime / year', good: 'down' },
+    ],
+    steps: [
+      {
+        short: 'Walk it',
+        chapter: 'problem',
+        title: 'Four boxes, four ways to go dark',
+        body: [
+          'DNS points at one load balancer. Behind it, several web servers (good) talk to one database (bad) through one cache (bad), all in one data centre (bad). Four things whose failure takes the site down: the balancer, the database, the cache if the app cannot run without it, and the building.',
+          'The web fleet is the only tier that already has spares. Everywhere else, the question "and when it dies?" has the answer "we are down".',
+        ],
+        metrics: { spofs: 4, avail: 99.5, downtime: '44 h' },
+        scene: scene([users('u', 0, 1, 'Fans'), lb('lb', 3, 1, 'Balancer', { state: 'warn', tag: 'SPOF' }), server('w', 6, 0, 'Web ×5'), cache('c', 9, 0, 'Cache', { state: 'warn', tag: 'SPOF' }), db('db', 9, 2, 'Database', { state: 'warn', tag: 'SPOF' }), region('dc', 3, 0, 7, 3, 'one data centre', { tag: 'SPOF' })], [link('u', 'lb', { flow: 'both' }), link('lb', 'w', { flow: 'both' }), link('w', 'c', { flow: 'both' }), link('w', 'db', { flow: 'both' })]),
+      },
+      {
+        short: 'Passive',
+        chapter: 'technique',
+        title: 'Active-passive: a spare that waits',
+        body: [
+          'The database gets a replica kept in sync; the balancer gets a standby watching its heartbeat. Each spare does nothing until the primary fails, then takes over (**failover**) in seconds to a minute: the replica is promoted, the standby claims the virtual address. Capacity is unchanged, because the spare was idle. Cost doubles for that tier.',
+          'Failover is a mechanism that must be tested. A standby that has never been promoted is a hope, not a design.',
+        ],
+        callout: { kind: 'warn', text: 'Practise failover on purpose, in daylight, regularly. The first time it runs should not be the night it matters.' },
+        changes: ['+ Database replica, promoted on failure', '+ Standby balancer with virtual IP', '~ Failover ≈ 30 s'],
+        metrics: { spofs: 2, avail: 99.9, downtime: '8.8 h' },
+        scene: scene([users('u', 0, 1, 'Fans'), lb('lb', 3, 0, 'Balancer A', { sub: 'active' }), lb('lb2', 3, 2, 'Balancer B', { sub: 'standby', state: 'dim' }), server('w', 6, 1, 'Web ×5'), db('db', 9, 0, 'Leader'), replica('r', 9, 2, 'Replica', { sub: 'promote on failure', state: 'new' })], [link('u', 'lb', { flow: 'both' }), link('u', 'lb2', { state: 'off', flow: 'none' }), link('lb', 'lb2', { state: 'dashed', flow: 'both', rate: 'light', label: 'heartbeat' }), link('lb', 'w', { flow: 'both' }), link('w', 'db', { flow: 'both' }), link('db', 'r', { flow: 'to', label: 'replicate' })]),
+      },
+      {
+        short: 'Active',
+        chapter: 'technique',
+        title: 'Active-active: spares that work',
+        body: [
+          'The cache becomes a cluster of three nodes, each holding a share (consistent hashing) and each serving traffic. Lose one and the other two carry on with two-thirds of the data warm; nothing to fail over, because nothing was idle. The web fleet already worked this way.',
+          'Active-active is cheaper per unit of capacity and fails more gracefully, but it only works for tiers that can share the load: stateless servers, partitioned caches, read replicas. A single-leader database cannot be active-active without the conflicts from the replication lesson.',
+        ],
+        callout: { kind: 'tradeoff', text: 'Active-passive is simple and fits things that must have one leader; the spare is pure cost. Active-active uses every machine and degrades gradually; it needs the tier to be partitionable or stateless.' },
+        changes: ['~ Cache: 1 node → 3-node cluster, all serving', '~ Losing one node = 33% misses, not an outage'],
+        metrics: { spofs: 1 },
+        scene: scene([server('w', 1, 1, 'Web ×5'), region('cc', 5, 0, 1, 3, 'cache cluster'), cache('c1', 5, 0, 'Node 1', { sub: 'serving' }), cache('c2', 5, 1, 'Node 2', { sub: 'serving' }), cache('c3', 5, 2, 'Node 3', { sub: 'serving' })], [link('w', 'c1', { flow: 'both' }), link('w', 'c2', { flow: 'both' }), link('w', 'c3', { flow: 'both' })]),
+      },
+      {
+        short: 'Maths',
+        chapter: 'insight',
+        title: 'Series multiply; parallel rescue',
+        body: [
+          'A request passes through the balancer, a web server, the cache and the database in **series**: it needs all of them. If each is 99.9% available, the chain is 0.999⁴ ≈ 99.6%. Adding tiers always lowers the product.',
+          'Two spares in **parallel** for one tier (either one suffices) fail together only if both fail: 0.001 × 0.001 = one in a million, so the tier is 99.9999%. Redundancy within a tier buys far more than any improvement to a single machine, which is why "two cheap ones" beats "one reliable one" almost every time.',
+        ],
+        scene: scene([note('s', 1, 0, 'series: 0.999⁴', { sub: '≈ 99.6% · four tiers' }), note('p', 5, 0, 'parallel: 1 − 0.001²', { sub: '≈ 99.9999% · one tier, two spares' }), note('m', 9, 0, 'rule', { sub: 'make each tier redundant' })]),
+      },
+      {
+        short: 'The building',
+        chapter: 'solution',
+        title: 'The last single point is the room',
+        body: [
+          'Every tier now has a spare, in the same building, on the same power, behind the same fibre. A digger through the fibre is still an outage. The final step is a second **availability zone** or region: another copy of the stack, kilometres away, with the database replicating across the gap and DNS or a global balancer steering traffic to whichever is healthy.',
+          'Cross-region brings back every hard question in this path: replication lag, which side is the leader, what happens in a partition. It is the most expensive redundancy and the only one that covers the room.',
+        ],
+        callout: { kind: 'recap', text: 'List what happens when each box dies. Give leaders an active-passive spare with tested failover; make partitionable tiers active-active. Series tiers multiply their failure chances; parallel spares nearly eliminate them. The last single point is the building.' },
+        changes: ['+ Second zone with full stack', '+ Cross-zone database replication', '+ DNS health-based steering'],
+        metrics: { spofs: 0, avail: 99.95, downtime: '4.4 h' },
+        scene: scene([users('u', 0, 1, 'Fans'), region('z1', 3, 0, 3, 1, 'zone A'), lb('lb1', 3, 0, 'Balancers'), db('d1', 5, 0, 'DB leader'), region('z2', 3, 2, 3, 1, 'zone B'), lb('lb2', 3, 2, 'Balancers'), db('d2', 5, 2, 'DB replica'), note('dns', 0, 3, 'DNS steering', { sub: 'health-based' })], [link('u', 'lb1', { flow: 'both' }), link('u', 'lb2', { flow: 'both', rate: 'light' }), link('d1', 'd2', { flow: 'to', label: 'cross-zone' }), link('dns', 'u', { state: 'dashed', flow: 'none' })]),
+      },
+    ],
+    quiz: [
+      q('q1', 'Four tiers in series are each 99.9% available. Roughly what is the availability of a request that needs all four?', ['99.9%', '99.6%', '99.99%'], 1, 'Availabilities in series multiply: 0.999⁴ ≈ 0.996.'),
+      q('q2', 'Which tier is naturally suited to active-active redundancy?', ['A single-leader relational database', 'A stateless web fleet', 'A standby load balancer'], 1, 'Stateless servers can all serve traffic at once; a single leader cannot without conflicts.'),
+      q('q3', 'A database replica exists but failover has never been run. What is the risk?', ['None; replication proves it works', 'The promotion may fail or be slow in ways nobody has seen, so the spare may not save you', 'The replica will fall behind'], 1, 'Failover is a mechanism with its own failure modes; it must be exercised to be trusted.'),
+    ],
+  }),
+
+  lesson({
+    id: 'sd-25-rate-limiting',
+    moduleId: MODULE,
+    order: 2,
+    title: 'Rate Limiting',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 10,
+    description: 'Stop one caller from using everyone’s capacity: token buckets, sliding windows, where the counters live when there are twenty servers, and what to say when you say no.',
+    scenario: 'A scalper’s bot hits the seat API 900 times a second, from one account, during the on-sale. The API fleet is sized for 2,000 requests a second from everybody. Ordinary fans are getting timeouts while one caller gets served.',
+    concepts: ['Token bucket', 'Fixed and sliding windows', 'Distributed counters', '429 responses', 'Load shedding'],
+    metrics: [
+      { key: 'abuser', label: 'Bot req/s served', good: 'down' },
+      { key: 'fans', label: 'Fan requests ok', unit: '%', good: 'up' },
+      { key: 'cpu', label: 'API CPU', unit: '%', good: 'down' },
+    ],
+    steps: [
+      {
+        short: 'One caller',
+        chapter: 'problem',
+        title: 'Nine hundred requests a second from one account',
+        body: [
+          'The bot polls the seat map 900 times a second looking for cancellations. The API treats every request the same, so the bot gets 45% of the fleet and the other 30,000 fans share the rest. p95 for fans is three seconds and rising. Nothing is broken; one caller is simply taking more than its share.',
+          'A shared resource with no limit per user is a resource owned by whoever asks fastest.',
+        ],
+        metrics: { abuser: 900, fans: 71, cpu: 98 },
+        scene: scene([users('bot', 0, 0, 'Bot', { sub: '900 req/s', state: 'hot' }), users('f', 0, 2, '30,000 fans', { sub: 'timing out', state: 'warn' }), server('api', 5, 1, 'API fleet', { sub: '98% CPU', state: 'hot' }), db('db', 9, 1, 'Seat state')], [link('bot', 'api', { flow: 'both', rate: 'heavy' }), link('f', 'api', { flow: 'both', rate: 'light', state: 'fail' }), link('api', 'db', { flow: 'both', rate: 'heavy' })]),
+      },
+      {
+        short: 'Token bucket',
+        chapter: 'technique',
+        title: 'A bucket of tokens per caller',
+        body: [
+          'Give each account a **bucket** that holds up to 20 tokens and refills at 10 a second. Every request takes a token; a request that finds the bucket empty is refused. A fan clicking around uses a token here and there and never notices. The bot drains its 20 in a blink and is then held to 10 a second, the refill rate.',
+          'The bucket size is the **burst** you allow; the refill rate is the sustained limit. Two numbers, and they describe fairness precisely.',
+        ],
+        callout: { kind: 'tip', text: 'Set the burst to what a real user does in a flurry (a page load that fires six calls) and the rate to what they could sustain. Legitimate users should almost never see the limit.' },
+        changes: ['+ Token bucket per account: 20 burst, 10/s refill', '~ Bot served at 10/s, refused at 890/s'],
+        metrics: { abuser: 10, fans: 99.5, cpu: 55 },
+        scene: scene([users('bot', 0, 0, 'Bot', { sub: '900 → 10 req/s' }), users('f', 0, 2, '30,000 fans', { sub: 'served' }), server('rl', 4, 1, 'Rate limiter', { sub: 'bucket per account', state: 'new' }), server('api', 8, 1, 'API fleet', { sub: '55% CPU' })], [link('bot', 'rl', { flow: 'to', rate: 'heavy', state: 'fail', label: '429 ×890/s' }), link('f', 'rl', { flow: 'both' }), link('rl', 'api', { flow: 'both' })]),
+      },
+      {
+        short: 'Windows',
+        chapter: 'technique',
+        title: 'Counting in windows, and the edge they leak',
+        body: [
+          'A simpler scheme counts requests per **fixed window**: 600 per minute, reset on the minute. The leak: 600 requests at 11:59:59 and 600 at 12:00:00 are 1,200 in one second, all allowed. A **sliding window** fixes that by counting the last 60 seconds from now, usually approximated by weighting the previous window’s count by how much of it still overlaps.',
+          'Token buckets are the usual choice because they are cheap, allow bursts explicitly, and have no edge. Windows are easier to explain in a contract ("1,000 requests per hour").',
+        ],
+        scene: scene([note('fw', 1, 0, 'fixed window', { sub: '600/min, resets on the minute' }), note('leak', 1, 1, '11:59:59 + 12:00:00', { sub: '1,200 in 1 s: allowed' }), note('sw', 5, 0, 'sliding window', { sub: 'last 60 s from now' }), note('tb', 9, 0, 'token bucket', { sub: 'burst + rate, no edge' })]),
+      },
+      {
+        short: 'Twenty servers',
+        chapter: 'problem',
+        title: 'Each server counts its own share',
+        body: [
+          'The limiter keeps buckets in memory on each API server. The balancer spreads the bot across twenty servers, each of which sees 45 requests a second, well under its local limit of 10 per second? No: each sees 45 and limits to 10, so the bot gets 200 a second, twenty times the intended limit. Per-server counters are the stateless-services lesson again.',
+          'The counters move to a shared store, Redis, with atomic increment-and-expire. Every server consults the same bucket, and the limit means what it says. The store is on the request path now, so it must be fast and redundant.',
+        ],
+        changes: ['− Per-server buckets ×20 = 20× the limit', '+ Buckets in Redis, atomic INCR + EXPIRE'],
+        metrics: { abuser: 10 },
+        scene: scene([users('bot', 0, 1, 'Bot'), lb('lb', 3, 1, 'Balancer'), server('a1', 6, 0, 'API 1', { sub: 'asks Redis' }), server('a2', 6, 1, 'API 2', { sub: 'asks Redis' }), server('a3', 6, 2, 'API …20', { sub: 'asks Redis' }), cache('r', 10, 1, 'Redis', { sub: 'one bucket per account', state: 'new' })], [link('bot', 'lb', { flow: 'to', rate: 'heavy' }), link('lb', 'a1', { flow: 'to' }), link('lb', 'a2', { flow: 'to' }), link('lb', 'a3', { flow: 'to' }), link('a1', 'r', { flow: 'both', rate: 'light' }), link('a2', 'r', { flow: 'both', rate: 'light' }), link('a3', 'r', { flow: 'both', rate: 'light' })]),
+      },
+      {
+        short: 'Saying no',
+        chapter: 'solution',
+        title: 'Refuse well, and shed load before you fall over',
+        body: [
+          'A refused request gets `429 Too Many Requests` with a `Retry-After` header and headers showing the limit and remaining budget, so a well-behaved client backs off instead of hammering. Refusing is cheap: a Redis lookup and a tiny response, which is the whole point, since the fleet would otherwise do the expensive work.',
+          'Per-user limits protect against one caller. **Load shedding** protects against everyone at once: when the fleet is near saturation, drop low-priority requests (the seat-map refresh) so high-priority ones (the purchase) still complete. A system that refuses 10% gracefully beats one that serves 100% at a crawl and then dies.',
+        ],
+        callout: { kind: 'recap', text: 'Limit per caller with a token bucket (burst plus rate) or a sliding window; keep the counters in a shared store so twenty servers enforce one limit; answer with 429 and Retry-After; and shed low-priority load before saturation takes everything down.' },
+        metrics: { abuser: 10, fans: 99.5, cpu: 55 },
+        scene: scene([users('bot', 0, 0, 'Bot', { sub: '429, Retry-After: 1' }), users('f', 0, 2, 'Fans'), server('rl', 4, 1, 'Limiter + shedder', { sub: 'priority: buy > view' }), server('api', 8, 1, 'API fleet', { sub: 'headroom kept' })], [link('bot', 'rl', { flow: 'to', state: 'fail', rate: 'heavy' }), link('f', 'rl', { flow: 'both' }), link('rl', 'api', { flow: 'both' })]),
+      },
+    ],
+    quiz: [
+      q('q1', 'In a token bucket limiter, what do the bucket size and the refill rate each control?', ['Bucket size: the sustained rate; refill: the burst', 'Bucket size: the burst allowed; refill: the sustained rate', 'Both control the burst'], 1, 'A full bucket is the burst a caller may spend at once; the refill rate is how fast they may keep going.'),
+      q('q2', 'A limiter keeps its counters in each server’s memory behind a balancer with 20 servers. What is the effective limit?', ['The configured limit', 'About 20 times the configured limit', 'One twentieth of the configured limit'], 1, 'Each server counts only what it sees, so a caller spread across 20 servers gets 20 separate allowances.'),
+      q('q3', 'The whole fleet is near saturation from legitimate traffic. What should it do?', ['Serve everything as slowly as necessary', 'Shed low-priority requests so the important ones still complete', 'Block the top ten callers'], 1, 'Load shedding keeps the system inside its capacity, trading some requests for the survival of the rest.'),
+    ],
+  }),
+
+  lesson({
+    id: 'sd-26-timeouts-and-retries',
+    moduleId: MODULE,
+    order: 3,
+    title: 'Timeouts and Retries',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 12,
+    description: 'A slow dependency is worse than a dead one: deadlines on every call, retries that back off and jitter, and the circuit breaker that stops a failing service taking its callers with it.',
+    scenario: 'The payments provider starts answering in 30 seconds instead of 200 milliseconds. The orders service waits, every thread fills with waiting requests, and in four minutes the entire Gigs API is unresponsive, including the pages that never touch payments.',
+    concepts: ['Timeouts', 'Retry storms', 'Exponential backoff with jitter', 'Circuit breakers', 'Bulkheads'],
+    metrics: [
+      { key: 'payP95', label: 'Payments p95', unit: 'ms', good: 'down' },
+      { key: 'threads', label: 'Threads waiting', good: 'down' },
+      { key: 'siteOk', label: 'Non-payment pages ok', unit: '%', good: 'up' },
+    ],
+    steps: [
+      {
+        short: 'Slow, not dead',
+        chapter: 'problem',
+        title: 'Thirty seconds of waiting, times every thread',
+        body: [
+          'The payments provider is degraded: every call takes 30 seconds, then succeeds. The orders service has 200 worker threads. Within a minute all 200 are waiting on payments. New requests, including "show me the event page", queue behind them. The whole API is down, caused by a dependency that is merely slow.',
+          'A dead dependency fails fast and the caller moves on. A slow one holds the caller’s resources hostage. Slow is worse.',
+        ],
+        metrics: { payP95: 30000, threads: 200, siteOk: 4 },
+        scene: scene([users('f', 0, 1, 'Fans', { sub: 'everything hangs', state: 'warn' }), service('o', 4, 1, 'Orders service', { sub: '200/200 threads waiting', state: 'down', tag: 'STALLED' }), service('p', 8, 1, 'Payments provider', { sub: '30 s per call', state: 'hot' })], [link('f', 'o', { flow: 'to', state: 'fail' }), link('o', 'p', { flow: 'both', rate: 'light', label: 'waiting…' })]),
+      },
+      {
+        short: 'Timeout',
+        chapter: 'technique',
+        title: 'Every call gets a deadline',
+        body: [
+          'Give the payments call a **timeout** of two seconds. A call that is not answered by then is abandoned, the thread is freed, and the fan sees "payment is taking longer than usual, try again". Threads turn over every two seconds instead of thirty; most of the fleet is serving event pages again.',
+          'The number matters. Too long and the stall returns; too short and healthy slow calls fail. Set it from the dependency’s real p99 with margin, and set one on every outbound call, with no exceptions, because the one without a timeout is the one that will hang.',
+        ],
+        callout: { kind: 'warn', text: 'Most HTTP clients have no timeout by default. "It never came up" is not evidence; it is luck that has not run out yet.' },
+        changes: ['+ 2 s timeout on payments calls', '~ Threads freed every 2 s'],
+        metrics: { threads: 40, siteOk: 92 },
+        scene: scene([users('f', 0, 1, 'Fans', { sub: 'pages load' }), service('o', 4, 1, 'Orders service', { sub: '40/200 threads waiting' }), service('p', 8, 1, 'Payments provider', { sub: 'still 30 s', state: 'hot' })], [link('f', 'o', { flow: 'both' }), link('o', 'p', { flow: 'to', state: 'fail', label: 'give up at 2 s' })]),
+      },
+      {
+        short: 'Retry storm',
+        chapter: 'problem',
+        title: 'Retrying immediately makes it worse',
+        body: [
+          'Payments is slow because it is overloaded. Our timed-out calls now retry at once, three times each. The provider was getting 500 calls a second; it is now getting 2,000, from us alone, most of them duplicates of work it is still trying to finish. We have turned our own resilience into an attack on the thing we depend on.',
+          'A retry is a bet that the second attempt will succeed. Against an overloaded service, immediate retries from every caller at once guarantee it will not.',
+        ],
+        changes: ['+ 3 immediate retries per timeout', '− Provider load 500 → 2,000 req/s'],
+        metrics: { payP95: 30000 },
+        scene: scene([service('o', 1, 1, 'Orders service', { sub: 'retry ×3 at once' }), service('p', 6, 1, 'Payments provider', { sub: '2,000 req/s, was 500', state: 'down', tag: 'RETRY STORM' })], [link('o', 'p', { flow: 'to', rate: 'heavy', state: 'fail', label: '4× the load' })]),
+      },
+      {
+        short: 'Backoff',
+        chapter: 'technique',
+        title: 'Wait longer each time, and not in step',
+        body: [
+          '**Exponential backoff**: wait 200 ms before the first retry, 400 before the second, 800 before the third, then give up. The provider sees the retries spread over time rather than piled on. **Jitter** adds randomness to each wait, so a thousand callers who timed out in the same instant do not all retry in the same instant either; without it, backoff just moves the spike.',
+          'Retry only what is safe to repeat: reads, and writes that are idempotent (the queues lesson). Retrying a non-idempotent charge is how a fan gets billed twice.',
+        ],
+        callout: { kind: 'tip', text: 'Budget retries at the edge: if the fan’s request already retried once inside, downstream services should not each retry three times more, or one user action becomes 27 calls.' },
+        changes: ['~ Retries: 200 / 400 / 800 ms ± jitter', '~ Only idempotent calls retried', '~ Provider load 500 → 650 req/s'],
+        scene: scene([service('o', 1, 1, 'Orders service', { sub: 'backoff + jitter' }), service('p', 6, 1, 'Payments provider', { sub: '650 req/s, recovering' }), note('n', 6, 3, '200 → 400 → 800 ms', { sub: '± random, idempotent only' })], [link('o', 'p', { flow: 'to', rate: 'light', label: 'spread out' }), link('p', 'n', { state: 'dashed', flow: 'none' })]),
+      },
+      {
+        short: 'Breaker',
+        chapter: 'technique',
+        title: 'Stop calling what is not answering',
+        body: [
+          'A **circuit breaker** watches the failure rate of calls to payments. When more than half of the last 50 fail, it **opens**: for the next 30 seconds every call fails immediately without being attempted, costing nothing and giving the provider room to recover. After 30 seconds it goes **half-open**, lets one trial call through, and closes again if that succeeds.',
+          'The fan sees a fast "payments are unavailable, your seat is held for 10 minutes" rather than a two-second wait and a timeout. Failing fast is a feature when the alternative is failing slowly.',
+        ],
+        changes: ['+ Breaker: open at 50% failures of last 50, 30 s cool-off', '~ Open: fail in 1 ms, no call made'],
+        metrics: { payP95: 1, threads: 0, siteOk: 100 },
+        scene: scene([users('f', 0, 1, 'Fans', { sub: '"seat held, try shortly"' }), service('o', 4, 1, 'Orders service', { sub: 'breaker OPEN', state: 'new', tag: 'FAIL FAST' }), service('p', 8, 1, 'Payments provider', { sub: 'recovering in peace' })], [link('f', 'o', { flow: 'both' }), link('o', 'p', { state: 'off', flow: 'none', label: '1 trial per 30 s' })]),
+      },
+      {
+        short: 'Bulkhead',
+        chapter: 'solution',
+        title: 'Keep one failure in its own compartment',
+        body: [
+          'Even with all of the above, payments calls and event-page requests shared the same 200 threads, which is how a payments problem became an everything problem. A **bulkhead** gives each dependency its own pool: payments may use at most 30 threads. When those 30 are waiting, further payments calls fail fast, and the other 170 threads never notice.',
+          'Ships survive a hull breach because the flooded compartment is sealed. Services survive a slow dependency the same way.',
+        ],
+        callout: { kind: 'recap', text: 'Every outbound call gets a timeout. Retries back off exponentially with jitter and only repeat idempotent work. A circuit breaker stops calling a failing dependency and fails fast. Bulkheads cap the resources any one dependency can hold, so slowness cannot spread.' },
+        metrics: { payP95: 1, threads: 30, siteOk: 100 },
+        scene: scene([users('f', 0, 1, 'Fans'), region('o', 4, 0, 1, 3, 'orders service'), server('t1', 4, 0, 'Pool: payments', { sub: '30 threads, full', state: 'warn' }), server('t2', 4, 1, 'Pool: catalogue', { sub: '100 threads, 20 busy' }), server('t3', 4, 2, 'Pool: seats', { sub: '70 threads, 15 busy' }), service('p', 8, 0, 'Payments', { sub: 'slow', state: 'hot' }), db('db', 8, 2, 'Database')], [link('f', 't1', { flow: 'to', rate: 'light' }), link('f', 't2', { flow: 'both' }), link('f', 't3', { flow: 'both' }), link('t1', 'p', { flow: 'to', state: 'fail' }), link('t2', 'db', { flow: 'both' }), link('t3', 'db', { flow: 'both' })]),
+      },
+    ],
+    quiz: [
+      q('q1', 'Why is a slow dependency often more dangerous than one that is down?', ['Slow responses are harder to log', 'Waiting calls hold threads and connections, so the slowness spreads to unrelated requests', 'A down dependency triggers alerts'], 1, 'A failed call returns at once; a slow one occupies the caller’s resources until it finishes or times out.'),
+      q('q2', 'A service times out against an overloaded dependency and retries immediately three times. What is the effect?', ['The dependency recovers faster', 'The dependency receives several times the load and recovers slower', 'The timeouts stop'], 1, 'Immediate retries multiply traffic exactly when the dependency has no capacity: a retry storm.'),
+      q('q3', 'What does an open circuit breaker do?', ['Retries the call with longer waits', 'Fails calls immediately without attempting them, for a cool-off period', 'Routes calls to a backup provider'], 1, 'An open breaker short-circuits calls to a failing dependency so the caller fails fast and the dependency gets room to recover.'),
+    ],
+  }),
+
+  lesson({
+    id: 'sd-27-observability',
+    moduleId: MODULE,
+    order: 4,
+    title: 'Observability',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 10,
+    description: 'Logs tell you what happened, metrics tell you how much, traces tell you where: the three signals, and alerts that fire on what fans feel rather than on what machines do.',
+    scenario: 'A fan reports that checkout "sometimes takes ages". The dashboards are green: CPU is fine, error rate is 0.1%. Somewhere in a path across six services, something is slow for some people, and nobody can see it.',
+    concepts: ['Structured logs', 'Metrics and percentiles', 'Distributed tracing', 'Correlation IDs', 'SLO-based alerting'],
+    metrics: [
+      { key: 'detect', label: 'Time to detect', good: 'down' },
+      { key: 'locate', label: 'Time to locate', good: 'down' },
+      { key: 'signals', label: 'Signals' },
+    ],
+    steps: [
+      {
+        short: 'Green dashboards',
+        chapter: 'problem',
+        title: 'Everything looks fine, and it is not',
+        body: [
+          'The checkout path crosses the API, orders, inventory, payments, the database and the receipts queue. Each service has a CPU graph and an error count, and all of them are calm. The fan’s complaint is about latency, for a subset of requests, somewhere along a path nobody can see as a whole.',
+          'Machine health is not user experience. You cannot find a slow request in a CPU graph.',
+        ],
+        metrics: { detect: 'user report', locate: 'unknown', signals: 'CPU, errors' },
+        scene: scene([users('f', 0, 1, 'Fan', { sub: '"sometimes ages"' }), service('api', 3, 1, 'API'), service('o', 5, 0, 'Orders'), service('i', 5, 2, 'Inventory'), service('p', 8, 0, 'Payments'), db('db', 8, 2, 'Database'), note('g', 11, 1, 'all green', { sub: 'CPU 30%, errors 0.1%' })], [link('f', 'api', { flow: 'both' }), link('api', 'o', { flow: 'both' }), link('api', 'i', { flow: 'both' }), link('o', 'p', { flow: 'both' }), link('i', 'db', { flow: 'both' })]),
+      },
+      {
+        short: 'Metrics',
+        chapter: 'technique',
+        title: 'Measure what the fan feels',
+        body: [
+          'Add **metrics** for the request itself: latency histograms per endpoint, so p50, p95 and p99 are visible, not an average. The checkout p99 turns out to be 9 seconds while p50 is 300 ms. The "sometimes" is one request in a hundred, and now it is a number on a graph with a timestamp.',
+          'Metrics are cheap aggregates: counters, gauges, histograms, a few hundred bytes a second per service. They tell you *that* something is wrong and *how much*. They cannot tell you which request, or why.',
+        ],
+        callout: { kind: 'tip', text: 'Four signals per service cover most of it: traffic, errors, latency (as percentiles) and saturation. Graph them per endpoint, not per machine.' },
+        changes: ['+ Latency histograms per endpoint', '~ Checkout p99 = 9 s, visible'],
+        metrics: { detect: '2 min', signals: '+ latency p50/p95/p99' },
+        scene: scene([service('api', 1, 1, 'API', { sub: 'emits histograms' }), server('m', 5, 1, 'Metrics store', { sub: 'per endpoint' }), note('g', 9, 0, 'checkout p50 300 ms', { sub: 'p99 9,000 ms', state: 'hot' }), note('g2', 9, 2, 'events p99 120 ms')], [link('api', 'm', { flow: 'to', rate: 'light' }), link('m', 'g', { state: 'dashed', flow: 'none' }), link('m', 'g2', { state: 'dashed', flow: 'none' })]),
+      },
+      {
+        short: 'Traces',
+        chapter: 'technique',
+        title: 'Follow one request across six services',
+        body: [
+          'The API assigns each incoming request a **trace ID** and passes it in a header to every service it calls, which pass it on in turn. Each service records a **span**: what it did, when it started, how long it took, with the trace ID. Collected together, the spans draw the request as a timeline across services.',
+          'Pick one of the 9-second traces. The API spent 8.6 seconds in inventory, which spent 8.5 seconds in a single database query, which turns out to lock on a hot row during seat holds. Located in a minute, without reading a line of code.',
+        ],
+        changes: ['+ Trace ID propagated in headers', '+ Spans per service', '~ Slow query in inventory found'],
+        metrics: { locate: '1 min', signals: '+ traces' },
+        scene: scene([note('t', 1, 0, 'trace 7f3a…', { sub: '9,020 ms total' }), service('api', 1, 1, 'API', { sub: '20 ms self' }), service('o', 4, 1, 'Orders', { sub: '180 ms' }), service('i', 7, 1, 'Inventory', { sub: '8,600 ms', state: 'hot', tag: 'SLOW SPAN' }), db('db', 10, 1, 'Database', { sub: 'query 8,500 ms', state: 'hot' })], [link('api', 'o', { flow: 'to', label: 'trace id' }), link('o', 'i', { flow: 'to', label: 'trace id' }), link('i', 'db', { flow: 'both', label: 'lock wait' })]),
+      },
+      {
+        short: 'Logs',
+        chapter: 'technique',
+        title: 'Structured logs with the same ID',
+        body: [
+          'The query was slow; why that row? The inventory service **logs**, as JSON with the trace ID in every line, which seat it was holding and for whom. Searching the logs by trace ID brings up exactly those lines, from every service, in order: a bot was holding and releasing the same seat 40 times a second.',
+          'Logs carry detail no metric can: the specific values. They are expensive (bytes per event, not per second), so log events with context, not progress, and index on the IDs you will search by.',
+        ],
+        callout: { kind: 'insight', text: 'Metrics say something is wrong. Traces say where. Logs say what. The trace ID is what joins all three, so put it on every line and every span.' },
+        changes: ['+ JSON logs with trace_id, seat_id, account_id', '~ Cause: one account holding seat 12A 40×/s'],
+        metrics: { signals: 'metrics, traces, logs' },
+        scene: scene([service('i', 1, 1, 'Inventory', { sub: 'logs JSON' }), server('ls', 5, 1, 'Log search', { sub: 'trace_id = 7f3a' }), note('l1', 9, 0, '{"seat":"12A","account":9917}', { sub: 'hold' }), note('l2', 9, 2, '{"seat":"12A","account":9917}', { sub: 'release · ×40/s' })], [link('i', 'ls', { flow: 'to', rate: 'light' }), link('ls', 'l1', { state: 'dashed', flow: 'none' }), link('ls', 'l2', { state: 'dashed', flow: 'none' })]),
+      },
+      {
+        short: 'Alerts',
+        chapter: 'solution',
+        title: 'Alert on the promise, not the machine',
+        body: [
+          'Define a **service level objective**: 99% of checkouts complete within 2 seconds, measured over 30 days. Alert when the **error budget** (the 1% you are allowed to miss) is burning faster than it should, at a rate that would exhaust it in hours. That alert would have fired on this problem days before the fan wrote in, and it does not fire for a CPU blip that nobody felt.',
+          'Alerts on CPU, memory and disk are for capacity planning in the morning. Alerts that wake someone up should mean a user promise is being broken.',
+        ],
+        callout: { kind: 'recap', text: 'Metrics (percentiles per endpoint) detect; traces (one ID across services) locate; logs (structured, with that ID) explain. Alert on SLOs and error-budget burn, so pages mean what fans feel.' },
+        metrics: { detect: 'minutes, automatic', locate: '1 min', signals: 'metrics, traces, logs, SLO' },
+        scene: scene([note('slo', 1, 0, 'SLO: 99% < 2 s', { sub: '30-day window' }), note('eb', 1, 2, 'error budget', { sub: '1% of checkouts' }), server('a', 5, 1, 'Alerting', { sub: 'burn rate > 10× → page' }), users('on', 9, 1, 'On-call', { sub: 'paged with the trace link' })], [link('slo', 'a', { state: 'dashed', flow: 'none' }), link('eb', 'a', { state: 'dashed', flow: 'none' }), link('a', 'on', { flow: 'to', rate: 'light' })]),
+      },
+    ],
+    quiz: [
+      q('q1', 'Checkout averages 300 ms but some users wait many seconds. Which signal shows the problem?', ['CPU per server', 'Latency percentiles (p95/p99) per endpoint', 'Disk usage'], 1, 'Tail percentiles expose the slow minority that an average and machine metrics hide.'),
+      q('q2', 'What makes it possible to see one request as a timeline across six services?', ['Synchronised clocks', 'A trace ID passed along every call, with each service recording a span', 'A shared log file'], 1, 'Distributed tracing propagates one ID and stitches each service’s spans together.'),
+      q('q3', 'Which alert should wake someone at 3 a.m.?', ['CPU above 80% on one server', 'The checkout SLO’s error budget burning fast enough to be exhausted within hours', 'A single 500 error'], 1, 'SLO burn-rate alerts correspond to users being affected; machine metrics belong on morning dashboards.'),
+    ],
+  }),
+];

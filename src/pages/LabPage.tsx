@@ -14,6 +14,9 @@ import Icon, { NF, deviceGlyph } from '../components/Icon';
 import { useAuth } from '../lib/auth';
 import { useProgress } from '../lib/progressStore';
 import { starsFor } from '../lib/pathProgress';
+import LessonView from '../components/LessonView';
+import { lessonStars } from '../content/lesson';
+import { emptyLesson } from '../engine';
 import { clearSession, loadSession, saveSession, type LabSession, type TermLine } from '../lib/session';
 
 function welcome(title: string, network: NetworkState, nodeId: string): TermLine[] {
@@ -255,7 +258,7 @@ export default function LabPage() {
 
   function check() {
     const r = grade(lab!.objectives, network);
-    const s = starsFor(r.passed, session!.hintsRevealed, lab!.hints.length);
+    const s = lab!.lesson ? lessonStars(lab!.lesson, network.lesson) : starsFor(r.passed, session!.hintsRevealed, lab!.hints.length);
     setStars(s);
     setResult(r);
     if (r.passed) recordPass(lab!.id, { score: r.score, stars: s, completedAt: new Date().toISOString() });
@@ -263,6 +266,49 @@ export default function LabPage() {
 
   const passedCount = live?.objectives.filter((o) => o.passed).length ?? 0;
   const termPrompt = device ? prompt(device) : host ? hostPrompt(host) : '';
+
+  // A lesson lab has no terminal: it is a stepped diagram with a knowledge check at the end.
+  if (lab.lesson) {
+    const spec = lab.lesson;
+    return (
+      <div className="flex h-full flex-col">
+        <Header>
+          <div className="mr-auto hidden min-w-0 flex-col leading-tight md:flex">
+            <span className="display truncate text-[15px] text-fg-bright">{lab.title}</span>
+            <span className="label text-muted">
+              {lab.estimatedMinutes} min · {lab.difficulty} · {spec.steps.length} steps · {passedCount}/{lab.objectives.length} objectives
+            </span>
+          </div>
+          <button type="button" onClick={reset} className="btn btn-danger btn-sm">
+            <Icon g={NF.refresh} />
+            Reset lesson
+          </button>
+          <Link to={pathUrl(pathIdOfLab(lab))} className="btn btn-ghost btn-sm">
+            <Icon g={NF.arrowLeft} />
+            Labs
+          </Link>
+          <AccountMenu />
+        </Header>
+        <LessonView lab={lab} spec={spec} progress={network.lesson ?? emptyLesson()} onProgress={(p) => setSession({ ...session, network: { ...network, lesson: p } })} onFinish={check} />
+        {result && (
+          <ResultsModal
+            result={result}
+            stars={stars}
+            labTitle={lab.title}
+            commandCount={spec.steps.length}
+            countLabel="steps"
+            nextLabId={next?.id}
+            onClose={() => setResult(null)}
+            onReplay={reset}
+            onNext={(id) => {
+              setResult(null);
+              navigate(`/lab/${id}`);
+            }}
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full flex-col">

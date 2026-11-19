@@ -25,7 +25,7 @@ alter table public.lab_progress add column if not exists points integer not null
 update public.lab_progress set points = stars * 100 where points = 0;
 
 -- Existing installations: add the path column and fill it in from the lab id. Every
--- Linux lab id starts lx-, every SQL one db-, every Terraform one tf-, every Ansible one an-, every Git one git-, and the rest are CCNA. The client writes
+-- Linux lab id starts lx-, every SQL one db-, every Terraform one tf-, every Ansible one an-, every Git one git-, every System Design one sd-, and the rest are CCNA. The client writes
 -- the real value on the learner's next sync, so this only has to cover today's rows.
 alter table public.lab_progress add column if not exists path text;
 update public.lab_progress
@@ -35,6 +35,7 @@ update public.lab_progress
                 when lab_id like 'tf-%' then 'terraform'
                 when lab_id like 'an-%' then 'ansible'
                 when lab_id like 'git-%' then 'git'
+                when lab_id like 'sd-%' then 'sysdesign'
                 else 'ccna'
               end
  where path is null;

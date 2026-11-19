@@ -7,13 +7,15 @@ interface Props {
   stars: number;
   labTitle: string;
   commandCount: number;
+  /** What the count is of; "commands" unless told otherwise. */
+  countLabel?: string;
   nextLabId?: string;
   onClose: () => void;
   onReplay: () => void;
   onNext: (id: string) => void;
 }
 
-export default function ResultsModal({ result, stars, labTitle, commandCount, nextLabId, onClose, onReplay, onNext }: Props) {
+export default function ResultsModal({ result, stars, labTitle, commandCount, countLabel = 'commands', nextLabId, onClose, onReplay, onNext }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-bg/80 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="results-title">
       <div className="card w-full max-w-md p-7 shadow-2xl shadow-black/50">
@@ -31,7 +33,7 @@ export default function ResultsModal({ result, stars, labTitle, commandCount, ne
         <div className="mt-4 grid grid-cols-3 gap-2 text-center">
           {[
             [`${result.score}%`, 'score'],
-            [String(commandCount), 'commands'],
+            [String(commandCount), countLabel],
             [`${result.objectives.filter((o) => o.passed).length}/${result.objectives.length}`, 'objectives'],
           ].map(([v, k]) => (
             <div key={k} className="rounded-xl bg-surface-2 px-2 py-2">

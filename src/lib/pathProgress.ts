@@ -16,6 +16,7 @@ export type SessionLookup = (labId: string) => NetworkState | null;
 
 /** True when the learner has typed at least one command in this network. */
 export function hasActivity(network: NetworkState): boolean {
+  if (network.lesson && (network.lesson.seen.length > 1 || Object.keys(network.lesson.answers).length > 0)) return true;
   return Object.values(network.devices).some((d) => d.commandHistory.length > 0) || Object.values(network.hosts).some((h) => h.commandHistory.length > 0);
 }
 

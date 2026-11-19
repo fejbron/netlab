@@ -1,4 +1,5 @@
 import type { DeviceState, NetworkState, Objective } from '../engine';
+import type { LessonSpec } from './lesson';
 
 export type Difficulty = 'Beginner' | 'Intermediate' | 'Advanced';
 
@@ -34,4 +35,6 @@ export interface Lab {
   createState: () => DeviceState | NetworkState;
   objectives: Objective[];
   isExam?: boolean;
+  /** Set on a lesson lab: a stepped, diagram-led explanation with a knowledge check instead of a terminal. */
+  lesson?: LessonSpec;
 }

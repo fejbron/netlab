@@ -285,6 +285,47 @@ body {
   }
 }
 
+/* Traffic running along a link in a lesson diagram. */
+.flow {
+  animation: flow-run 2.2s linear infinite;
+}
+@keyframes flow-run {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  12%,
+  88% {
+    opacity: 1;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 0;
+  }
+}
+/* On a failing link the traffic gets halfway and is lost. */
+.flow-fail {
+  animation-name: flow-fail;
+}
+@keyframes flow-fail {
+  0% {
+    offset-distance: 0%;
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  48% {
+    offset-distance: 46%;
+    opacity: 1;
+  }
+  52%,
+  100% {
+    offset-distance: 50%;
+    opacity: 0;
+  }
+}
+
 /* A card lifting under the pointer. */
 .lift {
   transition:
@@ -322,8 +363,12 @@ body {
   .term-line,
   .caret,
   .grid-bg::before,
-  .packet {
+  .packet,
+  .flow {
     animation: none;
+  }
+  .flow {
+    offset-distance: 50%;
   }
   .caret {
     display: none;

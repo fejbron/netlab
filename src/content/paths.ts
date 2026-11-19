@@ -504,7 +504,111 @@ export const gitPath: LearningPath = {
   },
 };
 
-export const paths: LearningPath[] = [ccnaPath, linuxPath, sqlPath, terraformPath, ansiblePath, gitPath];
+/**
+ * System design has no vendor exam either. The nine areas are the course's own
+ * chapters, weighted by how much of the material each holds.
+ */
+export const SD_DOMAINS: ExamDomain[] = [
+  { id: 'FN', title: 'Foundations', weight: 8 },
+  { id: 'SC', title: 'Scaling', weight: 14 },
+  { id: 'DS', title: 'Data and storage', weight: 26 },
+  { id: 'CM', title: 'Communication', weight: 10 },
+  { id: 'RL', title: 'Reliability', weight: 10 },
+  { id: 'AR', title: 'Architecture', weight: 10 },
+  { id: 'SE', title: 'Security', weight: 8 },
+  { id: 'SH', title: 'Shipping', weight: 4 },
+  { id: 'WS', title: 'Whole systems', weight: 10 },
+];
+
+export const SD_TOPICS: Record<string, string> = {
+  'FN.1': 'Follow a request from the browser to the server and back, and account for where the time goes',
+  'FN.2': 'Tell latency from throughput, read percentiles, and reason about utilisation and queueing',
+  'FN.3': 'Estimate traffic, storage and bandwidth on a napkin before designing anything',
+  'SC.1': 'Scale up versus scale out, and the limits of each',
+  'SC.2': 'Load balancing: algorithms, health checks, and what a balancer can and cannot do',
+  'SC.3': 'Stateless services, where session state goes, and why autoscaling needs it',
+  'SC.4': 'Caching: hit rates, invalidation, expiry, and the layers a request passes through',
+  'SC.5': 'Content delivery networks and serving static content close to the user',
+  'DS.1': 'Choose between relational and non-relational stores from the access pattern',
+  'DS.2': 'Indexes: what they speed up, what they cost, and the queries they cannot help',
+  'DS.3': 'Storage engines: B-trees, log-structured merge trees and the write and read trade-off',
+  'DS.4': 'Replication: leaders, followers, lag and reading your own writes',
+  'DS.5': 'Sharding: partition keys, hot shards and queries that cross shards',
+  'DS.6': 'Consistent hashing and rebalancing with the least data moved',
+  'DS.7': 'Generating unique identifiers at scale: counters, random IDs and time-ordered IDs',
+  'DS.8': 'CAP, consistency models, and what a partition forces you to choose',
+  'DS.9': 'Consensus and leader election: quorums, terms and split brain',
+  'DS.10': 'Transactions and isolation levels, and the anomalies each one allows',
+  'DS.11': 'Files and media: object storage, metadata, uploads and serving',
+  'CM.1': 'REST, RPC and GraphQL, and when each shape of API fits',
+  'CM.2': 'Message queues: decoupling, back-pressure, at-least-once delivery and idempotency',
+  'CM.3': 'Publish and subscribe, event streams and fan-out',
+  'CM.4': 'Real-time updates: polling, long polling, server-sent events and WebSockets',
+  'RL.1': 'Redundancy and failover: single points of failure, active-passive and active-active',
+  'RL.2': 'Rate limiting: token buckets, sliding windows, and protecting a shared resource',
+  'RL.3': 'Timeouts, retries with backoff and jitter, and circuit breakers',
+  'RL.4': 'Observability: logs, metrics, traces, and alerting on what users feel',
+  'AR.1': 'Monoliths and microservices: the costs of splitting and the costs of not splitting',
+  'AR.2': 'Service discovery and configuration in a system whose addresses keep changing',
+  'AR.3': 'Sagas and distributed transactions across services',
+  'AR.4': 'Batch and stream processing: windows, lateness and exactly-once in practice',
+  'SE.1': 'Authentication: passwords, sessions, tokens and multi-factor',
+  'SE.2': 'Authorization: roles, permissions and least privilege',
+  'SE.3': 'Encryption in transit and at rest, and keeping secrets out of code',
+  'SH.1': 'Testing a distributed system: unit, integration, contract and chaos',
+  'SH.2': 'Continuous delivery: pipelines, blue-green and canary deployments, rollbacks',
+  'WS.1': 'High-level and low-level design: how to run a design interview or review',
+  'WS.2': 'Design a URL shortener end to end',
+  'WS.3': 'Design a news feed with fan-out on write and on read',
+  'WS.4': 'Design a chat system with delivery guarantees and presence',
+};
+
+export const sysdesignPath: LearningPath = {
+  id: 'sysdesign',
+  title: 'System Design',
+  shortTitle: 'System Design',
+  scopeLabel: 'Distributed systems path',
+  levelLabel: 'Foundation to advanced',
+  eyebrow: 'Interactive diagrams · in your browser',
+  summary:
+    'Learn how large systems are put together by watching them grow: every idea is a diagram you step through, from one server and one database to load balancers, caches, replicas, shards, queues and whole designs that serve millions, with the numbers on a dashboard changing as you go.',
+  outcomes: [
+    'Follow a request through DNS, TCP, TLS, the application and the database, and say where the milliseconds went.',
+    'Scale a service out behind a load balancer, keep it stateless, and put caches and a CDN where they pay off.',
+    'Choose a data store from the access pattern, index it, replicate it, shard it, and know what each step costs you in consistency.',
+    'Decouple services with queues and events, and pick the right way to push updates to a client.',
+    'Design for failure: redundancy, rate limits, timeouts with backoff, circuit breakers and the observability to see it all.',
+    'Judge when to split a monolith, how services find each other, and how a transaction spans several of them.',
+    'Walk a whole system design from requirements to a diagram you can defend, for a URL shortener, a news feed and a chat app.',
+  ],
+  audience: 'Engineers preparing for system design interviews, and anyone who runs or builds services and wants the vocabulary and the trade-offs behind them.',
+  prerequisites: 'No code is written. Knowing what a server, a database and an HTTP request are is enough; the Linux and SQL paths cover the hands-on side of several of these ideas.',
+  skillTags: ['Load balancing', 'Caching', 'Replication', 'Sharding', 'Consensus', 'Queues', 'Rate limiting', 'Whole-system design'],
+  blueprint: {
+    version: 'NetLab System Design syllabus',
+    reviewedAt: '2026-11-19',
+    facts: [
+      { label: 'Syllabus', value: "NetLab's own" },
+      { label: 'Areas', value: '9' },
+      { label: 'Lessons', value: '40' },
+      { label: 'Format', value: 'Stepped diagrams with a knowledge check' },
+    ],
+    sources: [
+      { label: 'Designing Data-Intensive Applications (Kleppmann)', url: 'https://dataintensive.net/' },
+      { label: 'The System Design Primer', url: 'https://github.com/donnemartin/system-design-primer' },
+      { label: 'Google SRE book', url: 'https://sre.google/sre-book/table-of-contents/' },
+    ],
+    intro:
+      'System design has no single exam, so this path follows a syllabus of NetLab’s own: nine areas, each a list of ideas. Every module is tagged with the ideas it covers, so the bars show how far you are through each area.',
+    weightingNote:
+      'The percentages are each area’s share of the lessons, which is NetLab’s own weighting rather than anybody’s exam. Interview loops at different companies lean on different areas; data and storage is the biggest here because it is where most real design decisions, and most interview follow-ups, live.',
+    trademarkNotice: 'NetLab is an independent, open-source project. Product and company names mentioned in the lessons are trademarks of their respective owners and are used only to describe how those products behave.',
+    domains: SD_DOMAINS,
+    topics: SD_TOPICS,
+  },
+};
+
+export const paths: LearningPath[] = [ccnaPath, linuxPath, sqlPath, terraformPath, ansiblePath, gitPath, sysdesignPath];
 
 export function getPath(id: string): LearningPath | undefined {
   return paths.find((p) => p.id === id);

@@ -1,0 +1,357 @@
+import type { Lab } from '../types';
+import { client, db, lesson, link, note, q, queue, region, scene, server, service, users, worker } from '../lesson';
+
+/* Communication: API shapes, queues, publish/subscribe, and real-time delivery. */
+
+const MODULE = 'sd-communication';
+
+export const sdCommunicationLabs: Lab[] = [
+  lesson({
+    id: 'sd-20-rest-rpc-graphql',
+    moduleId: MODULE,
+    order: 1,
+    title: 'REST, RPC and GraphQL',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 10,
+    description: 'Three shapes for the same conversation: resources and verbs, remote function calls, and a query language for the client. Each fits a different caller.',
+    scenario: 'Gigs is opening its API to three callers: a mobile app that wants a whole screen in one call, a partner integrating ticket sales into their site, and an internal payments service that needs speed above all. One API shape will not suit all three.',
+    concepts: ['Resources and verbs', 'Over- and under-fetching', 'gRPC and schemas', 'GraphQL', 'Versioning'],
+    metrics: [
+      { key: 'calls', label: 'Calls per screen', good: 'down' },
+      { key: 'bytes', label: 'Bytes per screen', unit: 'KB', good: 'down' },
+      { key: 'p95', label: 'Screen p95', unit: 'ms', good: 'down' },
+    ],
+    steps: [
+      {
+        short: 'REST',
+        chapter: 'setup',
+        title: 'Nouns and verbs over HTTP',
+        body: [
+          'A **REST** API models the system as resources with URLs: `/events/42`, `/events/42/seats`, `/orders/991`. HTTP verbs do the work: `GET` reads, `POST` creates, `PATCH` changes, `DELETE` removes. Status codes carry the outcome, and every intermediary on the web already understands it: caches, proxies, browsers, logs.',
+          'It is the shape to default to for a public API. Partners can call it with any HTTP client, and `GET` responses cache for free.',
+        ],
+        metrics: { calls: 1, bytes: 12, p95: 90 },
+        scene: scene([client('p', 0, 1, 'Partner site'), server('api', 4, 1, 'REST API'), note('r1', 8, 0, 'GET /events/42', { sub: '200 + JSON' }), note('r2', 8, 2, 'POST /orders', { sub: '201 Created' })], [link('p', 'api', { flow: 'both', label: 'HTTP + JSON' }), link('api', 'r1', { state: 'dashed', flow: 'none' }), link('api', 'r2', { state: 'dashed', flow: 'none' })]),
+      },
+      {
+        short: 'Chatty',
+        chapter: 'problem',
+        title: 'The event screen needs six calls',
+        body: [
+          'The mobile app’s event screen shows the event, its venue, the seat map, the three cheapest price bands, the fan’s existing order, and the headline act. In resource terms that is six `GET`s, several of which cannot start until an earlier one returns the IDs they need. On a phone with 120 ms round trips, the screen takes a second and a half.',
+          'Each call also returns the whole resource, so the app downloads the venue’s full address and opening hours to show its name. **Under-fetching** (too many calls) and **over-fetching** (too much per call) are the two complaints every REST API eventually hears from a front end.',
+        ],
+        changes: ['− 6 sequential calls per screen', '− 140 KB for 9 KB of needed fields'],
+        metrics: { calls: 6, bytes: 140, p95: 1500 },
+        scene: scene([client('m', 0, 1, 'Mobile app', { sub: '120 ms RTT', state: 'warn' }), server('api', 5, 1, 'REST API'), note('n', 9, 1, '6 round trips', { sub: 'event → venue → seats → …' })], [link('m', 'api', { flow: 'both', rate: 'heavy', label: '×6, chained' }), link('api', 'n', { state: 'dashed', flow: 'none' })]),
+      },
+      {
+        short: 'GraphQL',
+        chapter: 'technique',
+        title: 'Let the client say what it needs',
+        body: [
+          'With **GraphQL** the app sends one query describing the shape it wants: event name, venue name, seat map, cheapest three bands, my order, headliner. The server resolves all of it and returns exactly those fields in one response. One round trip, 9 KB, and the screen is up in 200 ms. A new screen is a new query, not a new endpoint.',
+          'The cost moves to the server. A single query can fan out into dozens of database calls (the **N+1** problem) unless resolvers batch them. Caching is harder because every query is different. And a malicious or careless client can ask for something enormous, so queries must be limited in depth and cost.',
+        ],
+        callout: { kind: 'tradeoff', text: 'GraphQL trades server complexity for client flexibility. It pays off when many different front ends ask for many different shapes of the same data; it is overkill for a partner who needs three endpoints.' },
+        changes: ['+ GraphQL endpoint for the app', '~ 6 calls → 1, 140 KB → 9 KB'],
+        metrics: { calls: 1, bytes: 9, p95: 200 },
+        scene: scene([client('m', 0, 1, 'Mobile app'), server('gql', 4, 1, 'GraphQL', { sub: 'resolvers, batched', state: 'new' }), db('db', 8, 0, 'Database'), service('s', 8, 2, 'Other services')], [link('m', 'gql', { flow: 'both', label: '1 query, 9 KB' }), link('gql', 'db', { flow: 'both', rate: 'heavy' }), link('gql', 's', { flow: 'both' })]),
+      },
+      {
+        short: 'RPC',
+        chapter: 'technique',
+        title: 'Between services, just call the function',
+        body: [
+          'The payments service is called by the orders service 5,000 times a second, always with the same two arguments. Here the ceremony of REST is waste. **RPC** (gRPC being the usual choice) defines the call in a schema (`Charge(order_id, amount) → Receipt`), generates typed client and server code in each language, and sends a compact binary message over a persistent HTTP/2 connection. Latency and bytes drop by several times.',
+          'The schema is a contract both sides compile against, so a mismatch fails at build time rather than at 2 a.m. Browsers and partners cannot call it easily; it is for inside the walls.',
+        ],
+        changes: ['+ gRPC between orders and payments', '~ 1.2 KB JSON → 180 B protobuf', '~ p95 18 → 4 ms'],
+        scene: scene([service('o', 1, 1, 'Orders service'), service('p', 6, 1, 'Payments service'), note('s', 6, 3, 'Charge(order, amount)', { sub: 'schema, generated stubs' })], [link('o', 'p', { flow: 'both', rate: 'heavy', label: 'gRPC · HTTP/2 · 4 ms' }), link('p', 's', { state: 'dashed', flow: 'none' })]),
+      },
+      {
+        short: 'Versioning',
+        chapter: 'insight',
+        title: 'Every shape must survive a change',
+        body: [
+          'Whatever the shape, callers you do not control will keep using the version they integrated. Add fields freely; never remove or rename one that is in use. REST puts the version in the path (`/v2/events`) or a header; gRPC numbers fields so old clients skip new ones; GraphQL deprecates fields and watches who still asks for them.',
+          'The rule under all three: a change a client cannot detect is a change you may make. Anything else is a new version, kept alongside the old until the last caller leaves.',
+        ],
+        callout: { kind: 'recap', text: 'REST for public, cacheable, resource-shaped APIs. GraphQL when many front ends need many shapes of the same data. RPC for fast, typed calls between your own services. All three must evolve without breaking the callers already on them.' },
+        metrics: { calls: 1, bytes: 9, p95: 200 },
+        scene: scene([region('ext', 0, 0, 1, 3, 'outside'), client('pt', 0, 0, 'Partner', { sub: 'REST /v2' }), client('m', 0, 2, 'Mobile', { sub: 'GraphQL' }), region('int', 4, 0, 2, 3, 'inside'), server('edge', 4, 1, 'API edge'), service('o', 5, 0, 'Orders'), service('p', 5, 2, 'Payments')], [link('pt', 'edge', { flow: 'both' }), link('m', 'edge', { flow: 'both' }), link('edge', 'o', { flow: 'both', label: 'gRPC' }), link('o', 'p', { flow: 'both', label: 'gRPC' })]),
+      },
+    ],
+    quiz: [
+      q('q1', 'A mobile screen needs data from six resources and makes six sequential REST calls. What is this problem called?', ['Over-fetching', 'Under-fetching', 'N+1 resolvers'], 1, 'Needing many calls to assemble one view is under-fetching; downloading unneeded fields per call is over-fetching.'),
+      q('q2', 'Which API style is the best fit for a high-volume call between two internal services written in different languages?', ['REST with JSON', 'gRPC with a shared schema', 'GraphQL'], 1, 'A typed schema with generated stubs and compact binary messages suits fast internal calls.'),
+      q('q3', 'What change can a REST API make without a new version?', ['Renaming a response field', 'Adding a new optional field to a response', 'Changing a field’s type from string to number'], 1, 'Additions existing clients ignore are safe; removals, renames and type changes break them.'),
+    ],
+  }),
+
+  lesson({
+    id: 'sd-21-message-queues',
+    moduleId: MODULE,
+    order: 2,
+    title: 'Message Queues',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 12,
+    description: 'Put a buffer between the thing that asks and the thing that does: absorbing bursts, surviving a slow consumer, and the duplicate delivery you must design for.',
+    scenario: 'After every purchase, Gigs emails a receipt, generates a PDF ticket and notifies the venue. The purchase request waits for all three. When the email provider slows down, checkout slows down with it, and when it is down, nobody can buy a ticket.',
+    concepts: ['Producers and consumers', 'Decoupling', 'Back-pressure', 'At-least-once delivery', 'Idempotency'],
+    metrics: [
+      { key: 'checkout', label: 'Checkout p95', unit: 'ms', good: 'down' },
+      { key: 'backlog', label: 'Backlog', good: 'down' },
+      { key: 'workers', label: 'Workers' },
+      { key: 'lost', label: 'Receipts lost', good: 'down' },
+    ],
+    steps: [
+      {
+        short: 'Coupled',
+        chapter: 'problem',
+        title: 'Checkout waits for the email provider',
+        body: [
+          'The orders service, inside the purchase request, calls the email provider (300 ms), renders a PDF (200 ms) and calls the venue’s API (150 ms). Checkout takes 700 ms on a good day. Today the email provider is taking four seconds, and so is checkout. Yesterday it was down for ten minutes, and so was buying tickets.',
+          'None of those three things needs to happen *before* the fan is told their seat is theirs. They need to happen *soon*, reliably. That is a different requirement, and it wants a different mechanism.',
+        ],
+        metrics: { checkout: 4200, backlog: 0, workers: 0, lost: 0 },
+        scene: scene([users('f', 0, 1, 'Fan', { sub: 'waiting 4 s', state: 'warn' }), service('o', 3, 1, 'Orders service'), service('e', 7, 0, 'Email provider', { sub: '4 s today', state: 'hot' }), service('pdf', 7, 1, 'PDF render', { sub: '200 ms' }), service('v', 7, 2, 'Venue API', { sub: '150 ms' })], [link('f', 'o', { flow: 'both' }), link('o', 'e', { flow: 'both', rate: 'light', label: 'blocks' }), link('o', 'pdf', { flow: 'both' }), link('o', 'v', { flow: 'both' })]),
+      },
+      {
+        short: 'Queue',
+        chapter: 'technique',
+        title: 'Write a message, answer the fan, move on',
+        body: [
+          'Put a **queue** between them. The orders service commits the order, appends one message (`order.paid, id 991`) to the queue, and returns in 40 ms. Separate **workers** read messages off the queue and do the slow parts, at their own pace, retrying on failure. The **producer** and the **consumers** never speak directly; the queue holds the message until it is done.',
+          'If the email provider is slow, the queue grows and fans still check out instantly. If it is down for ten minutes, ten minutes of receipts wait and are sent when it returns.',
+        ],
+        callout: { kind: 'insight', text: 'A queue separates "this must happen" from "this must happen now". Anything the user does not need to wait for is a candidate.' },
+        changes: ['+ Queue: order.paid', '+ Workers consume it', '~ Checkout 4,200 → 40 ms'],
+        metrics: { checkout: 40, backlog: 12, workers: 3 },
+        scene: scene([users('f', 0, 1, 'Fan', { sub: '40 ms' }), service('o', 3, 1, 'Orders service'), queue('qn', 6, 1, 'order.paid', { sub: '12 waiting', state: 'new' }), worker('w1', 9, 0, 'Worker', { sub: 'email' }), worker('w2', 9, 1, 'Worker', { sub: 'pdf' }), worker('w3', 9, 2, 'Worker', { sub: 'venue' })], [link('f', 'o', { flow: 'both' }), link('o', 'qn', { flow: 'to', label: 'publish' }), link('qn', 'w1', { flow: 'to' }), link('qn', 'w2', { flow: 'to' }), link('qn', 'w3', { flow: 'to' })]),
+      },
+      {
+        short: 'Burst',
+        chapter: 'solution',
+        title: 'The on-sale burst becomes a backlog, not an outage',
+        body: [
+          'At the on-sale, 2,000 orders a second arrive for three minutes. The workers manage 600 a second. Without the queue the surplus would have failed; with it, the backlog climbs to 250,000 messages and then drains over the next seven minutes. Receipts arrive a few minutes late, which nobody minds, and no order was lost.',
+          'The backlog length is the health signal: if it grows without draining, add workers (they are stateless, so autoscale them on queue depth) or find out why they slowed.',
+        ],
+        changes: ['~ 2,000 msg/s in, 600/s out', '~ Backlog peaks at 250k, drains in 7 min', '+ Autoscale workers on backlog'],
+        metrics: { checkout: 45, backlog: 250000, workers: 3 },
+        scene: scene([users('f', 0, 1, '2,000 orders/s', { state: 'hot' }), service('o', 3, 1, 'Orders service'), queue('qn', 6, 1, 'order.paid', { sub: '250,000 waiting', state: 'hot', tag: 'BACKLOG' }), worker('w', 9, 1, '3 workers', { sub: '600 msg/s' })], [link('f', 'o', { flow: 'both', rate: 'heavy' }), link('o', 'qn', { flow: 'to', rate: 'heavy' }), link('qn', 'w', { flow: 'to' })]),
+      },
+      {
+        short: 'Lost?',
+        chapter: 'problem',
+        title: 'A worker dies mid-message',
+        body: [
+          'A worker takes message 991 off the queue, sends the email, and crashes before it can tell the queue it finished. Was the receipt sent? The queue does not know. If it assumes yes, the message is gone and maybe no email went out. If it assumes no, it hands 991 to another worker, who sends the email again.',
+          'There is no third option. A queue delivers **at most once** (and sometimes loses) or **at least once** (and sometimes repeats). Almost everyone chooses at least once, because losing an order is worse than a duplicate email.',
+        ],
+        callout: { kind: 'warn', text: '"Exactly once" between a queue and the outside world does not exist. What exists is at-least-once delivery plus consumers that can tell they have seen a message before.' },
+        changes: ['− Worker crashed after sending, before acknowledging', '~ Queue redelivers 991 after a timeout'],
+        metrics: { lost: 0 },
+        scene: scene([queue('qn', 2, 1, 'order.paid', { sub: '991: unacked, redeliver' }), worker('w1', 6, 0, 'Worker 1', { state: 'down', sub: 'crashed after send' }), worker('w2', 6, 2, 'Worker 2', { sub: 'gets 991 again' }), service('e', 10, 1, 'Email provider', { sub: 'receipt ×2?' })], [link('qn', 'w1', { flow: 'to', state: 'fail', label: 'no ack' }), link('qn', 'w2', { flow: 'to', label: 'redeliver' }), link('w2', 'e', { flow: 'to' })]),
+      },
+      {
+        short: 'Idempotent',
+        chapter: 'solution',
+        title: 'Make doing it twice the same as once',
+        body: [
+          'The consumer records what it has done, keyed by the message’s ID. Before sending receipt 991 it checks: already sent? Skip. The check and the record are one atomic write, so a crash between them cannot lose the fact. Now at-least-once delivery produces exactly-once *effects*, which is the thing you actually wanted.',
+          'This is **idempotency**, and it belongs in every consumer. Some work is naturally idempotent (setting `status = "sent"` twice is harmless); some needs an explicit record (charging a card twice is not).',
+        ],
+        changes: ['+ Consumer keeps a sent-receipts table keyed by order id', '~ Redelivery of 991 is a no-op'],
+        metrics: { lost: 0 },
+        scene: scene([queue('qn', 1, 1, 'order.paid'), worker('w', 5, 1, 'Worker', { sub: 'seen 991? yes → skip' }), db('seen', 5, 3, 'sent_receipts', { sub: '991 ✓', state: 'new' }), service('e', 9, 1, 'Email provider', { sub: 'one receipt' })], [link('qn', 'w', { flow: 'to', label: '991 again' }), link('w', 'seen', { flow: 'both', label: 'check + record' }), link('w', 'e', { flow: 'to', state: 'dashed', label: 'skipped' })]),
+      },
+      {
+        short: 'Poison',
+        chapter: 'tradeoff',
+        title: 'The message that fails every time',
+        body: [
+          'Message 1007 carries an order whose venue ID no longer exists. Every worker that picks it up throws, does not acknowledge, and the queue redelivers it, forever, to a worker that could have been doing useful work. After a set number of attempts the queue moves it to a **dead-letter queue**, where a human can look at it, and the main queue flows on.',
+          'Queues also reorder: with several workers, 1008 may finish before 1007. If order matters (a "cancelled" after a "paid"), either the consumer tolerates it, or messages for one order are routed to one partition read by one worker.',
+        ],
+        callout: { kind: 'recap', text: 'A queue decouples the request from the work: fast responses, bursts absorbed into a backlog, consumers that scale on depth. Delivery is at least once, so consumers must be idempotent; failures go to a dead-letter queue; ordering across workers is not guaranteed.' },
+        metrics: { checkout: 40, backlog: 0, workers: 3, lost: 0 },
+        scene: scene([queue('qn', 1, 1, 'order.paid', { sub: 'flows on' }), worker('w', 5, 1, 'Worker', { sub: '1007 failed ×5' }), queue('dlq', 5, 3, 'dead-letter', { sub: '1007 parked', state: 'warn' }), note('h', 9, 3, 'human', { sub: 'inspects later' })], [link('qn', 'w', { flow: 'to' }), link('w', 'dlq', { flow: 'to', state: 'dashed', label: 'after 5 tries' }), link('dlq', 'h', { state: 'dashed', flow: 'none' })]),
+      },
+    ],
+    quiz: [
+      q('q1', 'What is the main reason to put a queue between checkout and sending the receipt email?', ['Emails are sent faster', 'Checkout no longer waits on, or fails with, the email provider', 'The queue deduplicates orders'], 1, 'The queue separates the request from slow or unreliable follow-up work.'),
+      q('q2', 'A queue promises at-least-once delivery. What must the consumer do?', ['Nothing; duplicates cannot happen', 'Be idempotent: detect and skip messages it has already processed', 'Acknowledge before processing'], 1, 'Redelivery after a crash means the same message can arrive twice; the consumer must make a repeat harmless.'),
+      q('q3', 'A message fails on every attempt and is redelivered endlessly. What is the fix?', ['Increase the number of workers', 'Move it to a dead-letter queue after N attempts', 'Delete the queue'], 1, 'A poison message should be parked for inspection so it stops consuming workers.'),
+    ],
+  }),
+
+  lesson({
+    id: 'sd-22-pubsub-and-events',
+    moduleId: MODULE,
+    order: 3,
+    title: 'Pub/Sub and Events',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 10,
+    description: 'One event, many interested parties: topics that fan out to independent subscribers, event logs you can replay, and the producer that no longer knows who is listening.',
+    scenario: 'Five teams want to know when an order is paid: receipts, analytics, fraud, the venue feed and the loyalty programme. The orders service currently calls each one, and every new team means another change to checkout.',
+    concepts: ['Topics', 'Fan-out', 'Decoupled producers', 'Event logs', 'Replay'],
+    metrics: [
+      { key: 'subs', label: 'Subscribers' },
+      { key: 'knows', label: 'Producer knows of' },
+      { key: 'replay', label: 'Can replay' },
+    ],
+    steps: [
+      {
+        short: 'Five calls',
+        chapter: 'problem',
+        title: 'Checkout knows everyone’s phone number',
+        body: [
+          'When an order is paid, the orders service calls receipts, analytics, fraud, the venue feed and loyalty. Five calls, five failure modes, and every new interested team is a pull request against checkout. Last month analytics changed their endpoint and checkout broke for an hour.',
+          'The orders service should not have to know who cares that an order was paid. It should announce it and get on with its day.',
+        ],
+        metrics: { subs: 5, knows: 5, replay: 'no' },
+        scene: scene([service('o', 1, 2, 'Orders service', { sub: 'calls 5 services', state: 'warn' }), service('r', 6, 0, 'Receipts'), service('a', 6, 1, 'Analytics', { sub: 'changed URL', state: 'warn' }), service('f', 6, 2, 'Fraud'), service('v', 6, 3, 'Venue feed'), service('l', 6, 4, 'Loyalty')], [link('o', 'r', { flow: 'to' }), link('o', 'a', { flow: 'to', state: 'fail' }), link('o', 'f', { flow: 'to' }), link('o', 'v', { flow: 'to' }), link('o', 'l', { flow: 'to' })]),
+      },
+      {
+        short: 'Topic',
+        chapter: 'technique',
+        title: 'Publish once; whoever cares, subscribes',
+        body: [
+          'A **topic** is a named stream of events. The orders service publishes `OrderPaid {id, fan, event, amount}` to the `orders` topic and knows nothing else. Each interested team **subscribes**; the broker delivers every event to every subscriber, each with its own cursor and its own pace. Loyalty joins next month by subscribing, not by asking the orders team for anything.',
+          'This is **fan-out**: one message in, N copies out. A queue gives each message to one consumer; a topic gives each message to every subscriber.',
+        ],
+        callout: { kind: 'insight', text: 'Queues distribute work; topics distribute news. The question to ask is whether a message should be handled by one of the consumers or by all of them.' },
+        changes: ['+ Topic orders', '~ Orders service publishes, knows nobody', '+ 5 independent subscriptions'],
+        metrics: { subs: 5, knows: 0 },
+        scene: scene([service('o', 1, 2, 'Orders service', { sub: 'publishes' }), queue('t', 4, 2, 'topic: orders', { sub: 'OrderPaid', state: 'new' }), service('r', 8, 0, 'Receipts'), service('a', 8, 1, 'Analytics'), service('f', 8, 2, 'Fraud'), service('v', 8, 3, 'Venue feed'), service('l', 8, 4, 'Loyalty', { sub: 'joined by subscribing', state: 'new' })], [link('o', 't', { flow: 'to', label: 'publish' }), link('t', 'r', { flow: 'to' }), link('t', 'a', { flow: 'to' }), link('t', 'f', { flow: 'to' }), link('t', 'v', { flow: 'to' }), link('t', 'l', { flow: 'to' })]),
+      },
+      {
+        short: 'Slow subscriber',
+        chapter: 'solution',
+        title: 'Analytics falls behind; nobody else notices',
+        body: [
+          'Analytics goes down for an hour. Its subscription simply stops advancing; events accumulate for it. Receipts, fraud and the others keep consuming in real time. When analytics returns it reads the hour it missed and catches up. In the old design, the failure of analytics was a failure of checkout.',
+          'Every subscriber has its own backlog and its own failure, and the publisher is affected by none of them.',
+        ],
+        changes: ['− Analytics down 1 h', '~ Its cursor waits; others unaffected'],
+        scene: scene([service('o', 1, 2, 'Orders service'), queue('t', 4, 2, 'topic: orders'), service('r', 8, 0, 'Receipts', { sub: 'current' }), service('a', 8, 1, 'Analytics', { state: 'down', sub: '3,600 behind' }), service('f', 8, 2, 'Fraud', { sub: 'current' }), service('v', 8, 3, 'Venue feed', { sub: 'current' })], [link('o', 't', { flow: 'to' }), link('t', 'r', { flow: 'to' }), link('t', 'a', { flow: 'to', state: 'off', label: 'paused' }), link('t', 'f', { flow: 'to' }), link('t', 'v', { flow: 'to' })]),
+      },
+      {
+        short: 'Log',
+        chapter: 'technique',
+        title: 'Keep the events; replay them later',
+        body: [
+          'A classic broker deletes a message once every subscriber has it. An **event log** (Kafka is the usual example) keeps events for days or forever, in order, in partitions. A subscriber is just a position in the log. A new service can start at the beginning and rebuild its view from history; a buggy one can rewind a week and reprocess.',
+          'Replay is the feature that changes how teams think: the log becomes the record of what happened, and each service’s database is a derived view of it.',
+        ],
+        callout: { kind: 'tip', text: 'Retention is a design decision. Seven days lets you fix most bugs; forever makes the log a source of truth, with the storage bill and the schema-evolution burden that implies.' },
+        changes: ['~ Broker → event log, 30-day retention', '+ New fraud model replays last 30 days to train'],
+        metrics: { replay: 'yes, 30 d' },
+        scene: scene([service('o', 1, 1, 'Orders service'), queue('t', 4, 1, 'orders log', { sub: 'offsets 0 … 8.2M' }), service('f', 8, 0, 'Fraud v2', { sub: 'replaying from 0', state: 'new' }), service('r', 8, 2, 'Receipts', { sub: 'at 8.2M' })], [link('o', 't', { flow: 'to' }), link('t', 'f', { flow: 'to', rate: 'heavy', label: 'replay' }), link('t', 'r', { flow: 'to', rate: 'light', label: 'live' })]),
+      },
+      {
+        short: 'Costs',
+        chapter: 'recap',
+        title: 'What you pay for the decoupling',
+        body: [
+          'Nobody can look at the orders service and see what happens when an order is paid; the answer is spread across five subscribers, and tracing a problem means following an event across them. The event schema is now a public contract: change a field and a subscriber you have never met breaks. And ordering holds only within a partition, so "cancelled" can overtake "paid" unless both are keyed to the same order.',
+          'For a system with many consumers of the same facts, these costs are far smaller than the alternative. For two services that talk to each other, a direct call is still fine.',
+        ],
+        callout: { kind: 'recap', text: 'Publish events to a topic; subscribers each get every event at their own pace, and the producer knows none of them. An event log keeps history for replay. Pay for it in traceability, schema discipline and per-partition ordering.' },
+        metrics: { subs: 5, knows: 0, replay: 'yes, 30 d' },
+        scene: scene([note('n1', 1, 0, 'Where does OrderPaid go?', { sub: 'five places, no single view' }), note('n2', 4, 0, 'Schema is a contract', { sub: 'add fields, never remove' }), note('n3', 7, 0, 'Order per partition', { sub: 'key by order id' }), note('n4', 10, 0, 'Trace across services', { sub: 'observability lesson' })]),
+      },
+    ],
+    quiz: [
+      q('q1', 'What is the difference between a queue and a topic?', ['A topic is faster', 'A queue gives each message to one consumer; a topic gives each message to every subscriber', 'A queue keeps history'], 1, 'Queues distribute work among consumers; topics fan events out to all interested subscribers.'),
+      q('q2', 'A new team wants to react to orders being paid. With pub/sub, what changes in the orders service?', ['A new call is added', 'Nothing; the team subscribes to the topic', 'The topic is renamed'], 1, 'The producer publishes without knowing its subscribers, so adding one is the subscriber’s work alone.'),
+      q('q3', 'What does an event log with retention give you that a plain broker does not?', ['Guaranteed global ordering', 'The ability to replay past events to a new or repaired consumer', 'Lower latency'], 1, 'Retained, ordered events let a consumer start from any past position and rebuild its state.'),
+    ],
+  }),
+
+  lesson({
+    id: 'sd-23-real-time-updates',
+    moduleId: MODULE,
+    order: 4,
+    title: 'Real-time Updates',
+    difficulty: 'Intermediate',
+    estimatedMinutes: 10,
+    description: 'Getting news to a browser that is sitting there waiting: polling, long polling, server-sent events and WebSockets, and the connection count that comes with each.',
+    scenario: 'The seat map should grey out a seat the instant someone else buys it. HTTP is request and response: the browser asks, the server answers. Nothing in it lets the server speak first. Several things fake it, and one does not.',
+    concepts: ['Polling', 'Long polling', 'Server-sent events', 'WebSockets', 'Connection fan-out'],
+    metrics: [
+      { key: 'delay', label: 'Update delay', unit: 's', good: 'down' },
+      { key: 'rpm', label: 'Requests/min per fan', good: 'down' },
+      { key: 'conns', label: 'Open connections' },
+    ],
+    steps: [
+      {
+        short: 'Polling',
+        chapter: 'setup',
+        title: 'Ask every five seconds',
+        body: [
+          'The simplest thing: the browser asks `GET /events/42/seats` every five seconds. Updates arrive up to five seconds late, and 20,000 fans watching the map make 240,000 requests a minute, almost all of which return "nothing changed".',
+          'Polling works everywhere, caches well, and is the right answer more often than engineers admit, for data that changes rarely. For a seat map during an on-sale, five seconds is a lifetime and the request volume is silly.',
+        ],
+        metrics: { delay: 5, rpm: 12, conns: 0 },
+        scene: scene([users('f', 0, 1, '20,000 fans'), server('w', 5, 1, 'Web fleet', { sub: '4,000 req/s, 99% "no change"' }), db('db', 9, 1, 'Seat state')], [link('f', 'w', { flow: 'both', rate: 'heavy', label: 'every 5 s' }), link('w', 'db', { flow: 'both', rate: 'heavy' })]),
+      },
+      {
+        short: 'Long poll',
+        chapter: 'technique',
+        title: 'Ask, and let the server hold the question',
+        body: [
+          '**Long polling**: the browser asks, and the server does not answer until something changes (or a timeout of, say, 30 seconds passes). The moment a seat sells, every held request is answered, and the browser immediately asks again. Updates are near-instant and the "nothing changed" traffic is gone.',
+          'The cost moves to the server: 20,000 open requests are 20,000 connections being held, which a thread-per-request server handles badly and an event-driven one handles fine.',
+        ],
+        changes: ['~ Server holds the request until a change', '~ Delay 5 s → 0.2 s', '~ 20,000 held connections'],
+        metrics: { delay: 0.2, rpm: 2, conns: 20000 },
+        scene: scene([users('f', 0, 1, '20,000 fans'), server('w', 5, 1, 'Web fleet', { sub: '20,000 held requests' }), db('db', 9, 1, 'Seat state', { sub: 'change → answer all' })], [link('f', 'w', { flow: 'both', rate: 'light', label: 'held ≤ 30 s' }), link('db', 'w', { flow: 'to', rate: 'light', label: 'seat sold' })]),
+      },
+      {
+        short: 'SSE',
+        chapter: 'technique',
+        title: 'One request, a stream of events',
+        body: [
+          '**Server-sent events** keep a single HTTP response open and stream `event: seat-sold` lines down it as they happen. The browser’s `EventSource` reconnects by itself and tells the server the last event ID it saw, so a dropped connection does not miss anything. It is plain HTTP, so proxies and load balancers mostly understand it.',
+          'It is one way: server to browser. The browser still uses ordinary requests to buy a seat. For "watch this thing change", that is exactly the shape needed.',
+        ],
+        callout: { kind: 'tip', text: 'SSE is the under-used middle option. If the client only needs to receive, it is simpler than WebSockets and more efficient than long polling.' },
+        changes: ['~ One open response per fan, events streamed', '+ Auto-reconnect with Last-Event-ID'],
+        metrics: { delay: 0.1, rpm: 0, conns: 20000 },
+        scene: scene([users('f', 0, 1, '20,000 fans'), server('w', 5, 1, 'Web fleet', { sub: '20,000 open streams' }), db('db', 9, 1, 'Seat state')], [link('w', 'f', { flow: 'to', rate: 'light', label: 'event: seat-sold' }), link('f', 'w', { flow: 'to', rate: 'light', state: 'dashed', label: 'POST /buy (normal)' }), link('db', 'w', { flow: 'to', rate: 'light' })]),
+      },
+      {
+        short: 'WebSocket',
+        chapter: 'technique',
+        title: 'Both ways, all the time',
+        body: [
+          'A **WebSocket** starts as an HTTP request and upgrades into a persistent two-way connection: either side sends messages whenever it likes, with almost no overhead per message. Chat, multiplayer games and collaborative editing need this. The seat map does not, strictly, but a live "12 people are looking at this seat" counter sent from the browser would.',
+          'Everything downstream must now understand long-lived connections: balancers must not time them out, servers must track them, and a deploy that restarts a server drops every socket on it, so clients must reconnect and resynchronise.',
+        ],
+        changes: ['~ Persistent two-way connection per fan', '− Balancer idle timeouts raised; reconnect logic in the client'],
+        metrics: { delay: 0.05, conns: 20000 },
+        scene: scene([users('f', 0, 1, '20,000 fans'), server('ws', 5, 1, 'Socket servers', { sub: '20,000 sockets' }), db('db', 9, 1, 'Seat state')], [link('f', 'ws', { flow: 'both', rate: 'normal', label: 'messages both ways' }), link('db', 'ws', { flow: 'to', rate: 'light' })]),
+      },
+      {
+        short: 'Fan-out',
+        chapter: 'solution',
+        title: 'One change, twenty thousand sockets',
+        body: [
+          'Whichever of the three you pick, the problem at scale is the same: a seat sells, and 20,000 connections spread over ten servers must each be told. The socket servers subscribe to a `seats` topic (the pub/sub lesson); the orders service publishes once; each socket server pushes to the connections it holds. No server needs to know where any fan is connected.',
+          'Choose polling for slow-changing data, long polling when you cannot change the infrastructure, SSE for server-to-client streams, WebSockets when the client also talks. All four end in the same fan-out.',
+        ],
+        callout: { kind: 'recap', text: 'HTTP cannot push, so you poll (simple, late), long-poll (held requests), stream with SSE (one-way, auto-reconnect) or open a WebSocket (two-way, persistent). At scale, updates reach held connections through a topic the connection servers subscribe to.' },
+        metrics: { delay: 0.1, rpm: 0, conns: 20000 },
+        scene: scene([service('o', 0, 1, 'Orders service'), queue('t', 3, 1, 'topic: seats'), server('s1', 6, 0, 'Socket server 1', { sub: '2,000 conns' }), server('s2', 6, 1, 'Socket server 2', { sub: '2,000 conns' }), server('s3', 6, 2, 'Socket server …', { sub: '×10' }), users('f', 10, 1, '20,000 fans')], [link('o', 't', { flow: 'to', rate: 'light', label: 'seat 12A sold' }), link('t', 's1', { flow: 'to', rate: 'light' }), link('t', 's2', { flow: 'to', rate: 'light' }), link('t', 's3', { flow: 'to', rate: 'light' }), link('s1', 'f', { flow: 'to' }), link('s2', 'f', { flow: 'to' }), link('s3', 'f', { flow: 'to' })]),
+      },
+    ],
+    quiz: [
+      q('q1', 'A dashboard shows a figure that changes a few times an hour. Which approach is most appropriate?', ['WebSockets', 'Polling every minute', 'Long polling'], 1, 'For slowly changing data, simple polling is cheap, cacheable and good enough.'),
+      q('q2', 'The client only needs to receive a stream of updates and never sends anything on that channel. Which fits best?', ['Server-sent events', 'WebSockets', 'Short polling every second'], 0, 'SSE streams one-way over plain HTTP with built-in reconnection, simpler than a WebSocket for receive-only use.'),
+      q('q3', 'Fans hold 20,000 open connections across ten servers. How does a single seat sale reach all of them?', ['The orders service calls each server by address', 'The connection servers subscribe to a topic that the orders service publishes to once', 'Each browser polls the database'], 1, 'Pub/sub fan-out lets the publisher send once and every connection server deliver to its own clients.'),
+    ],
+  }),
+];

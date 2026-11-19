@@ -162,6 +162,9 @@ export type Check = Base &
     | AnCheck
     // --- Git (device = the workstation holding the repository); see git/grade.ts
     | GitCheck
+    // --- Lessons (the network carries lesson progress instead of devices); see content/lesson.ts
+    | { type: 'lesson-steps'; count: number }
+    | { type: 'lesson-quiz'; questions: string[] }
   );
 
 const SQL_CHECKS = new Set(['sql-table', 'sql-query', 'sql-answer', 'sql-ran', 'sql-index', 'sql-view', 'sql-result']);
@@ -205,6 +208,10 @@ function describe(check: Check): string {
   if (AN_CHECKS.has(check.type)) return describeAn(check as AnCheck, '');
   if (GIT_CHECKS.has(check.type)) return describeGit(check as GitCheck, '');
   switch (check.type) {
+    case 'lesson-steps':
+      return `Open all ${check.count} steps`;
+    case 'lesson-quiz':
+      return `Answer all ${check.questions.length} questions correctly`;
     case 'command':
       return `Run ${readable(check.pattern)}${on}`;
     case 'mode':
@@ -625,6 +632,11 @@ export function evaluateCheck(check: Check, net: NetworkState): boolean {
 }
 
 function evaluateCheckInner(check: Check, net: NetworkState): boolean | undefined {
+  if (check.type === 'lesson-steps') {
+    const seen = new Set(net.lesson?.seen ?? []);
+    return Array.from({ length: check.count }, (_, i) => i).every((i) => seen.has(i));
+  }
+  if (check.type === 'lesson-quiz') return check.questions.every((id) => net.lesson?.answers[id]?.correct === true);
   if (check.type === 'ping') {
     const id = check.device ?? net.primary;
     const pings = net.devices[id]?.pings ?? net.hosts[id]?.pings ?? [];

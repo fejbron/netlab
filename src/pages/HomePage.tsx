@@ -257,7 +257,7 @@ export default function HomePage() {
       <section id="paths" className="mx-auto w-full max-w-6xl scroll-mt-16 px-4 py-16 lg:py-20">
         <Reveal>
           <p className="label text-accent">Learning paths</p>
-          <h2 className="display mt-2 text-3xl text-fg-bright">{['One', 'Two', 'Three', 'Four', 'Five', 'Six'][paths.length - 1] ?? paths.length} courses, one terminal</h2>
+          <h2 className="display mt-2 text-3xl text-fg-bright">{['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven'][paths.length - 1] ?? paths.length} courses, one terminal</h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted">Each path unlocks lab by lab and ends in exams that put the whole thing together. Start anywhere; they do not depend on each other.</p>
         </Reveal>
         <div className="mt-8 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
